@@ -1,7 +1,7 @@
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { 
   Scale, LogOut, User, LayoutDashboard, Briefcase, Settings, 
-  Crown, Bell, Trash2, FileText, CheckCheck, X, BookOpen, Clock, Search, Menu, Calendar, Globe, Sparkles, Bookmark, Sun, Moon, ShieldAlert
+  Crown, Bell, Trash2, FileText, CheckCheck, X, BookOpen, Clock, Search, Menu, Calendar, Globe, Sparkles, Bookmark, Sun, Moon, ShieldAlert, LayoutGrid, MessageSquare
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { auth, db } from "../firebase";
@@ -524,172 +524,267 @@ export function Navbar({ user, children }: { user: any; children?: React.ReactNo
         {/* WORKSPACE APP PAGE CONTENT WRAPPER */}
         <main className={cn(
           "flex-1 min-h-0 min-w-0 h-full w-full bg-[var(--bg-secondary)] relative transition-colors duration-200",
-          location.pathname.startsWith("/result") || location.pathname === "/chat" || location.pathname === "/consultation" || location.pathname.startsWith("/builder")
-            ? "overflow-hidden pb-[calc(4rem+env(safe-area-inset-bottom,0px))] lg:pb-0"
-            : "overflow-y-auto pb-[calc(4.5rem+env(safe-area-inset-bottom,0px))] lg:pb-0"
+          location.pathname.startsWith("/result") || location.pathname === "/chat" || location.pathname === "/consultation" || location.pathname === "/" || location.pathname.startsWith("/builder")
+            ? "overflow-hidden pb-[calc(4.5rem+max(12px,env(safe-area-inset-bottom,12px)))] lg:pb-0"
+            : "overflow-y-auto pb-24 sm:pb-28 lg:pb-0"
         )}>
           {children}
         </main>
       </div>
 
-      {/* 3. MOBILE SLIDING DRAWER OVERLAY */}
+      {/* 3. MORE MENU BOTTOM SHEET */}
       {mobileMenuOpen && (
-        <div className="lg:hidden fixed inset-0 z-[1000] bg-black/50 dark:bg-black/70 backdrop-blur-xs flex justify-end">
-          {/* Drawer Body container */}
-          <div className="w-68 bg-white dark:bg-zinc-900 h-full p-6 flex flex-col justify-between shadow-2xl animate-fade-in">
-            
-            <div className="space-y-6">
-              <div className="flex items-center justify-between pb-3.5 border-b border-gray-100 dark:border-zinc-800">
-                <span className="text-xs font-bold uppercase text-gray-400 tracking-wider">Menyu</span>
-                <button 
-                  onClick={() => setMobileMenuOpen(false)} 
-                  className="p-1.5 text-gray-400 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-lg cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
+        <div className="lg:hidden fixed inset-0 z-50 flex flex-col justify-end">
+          {/* Backdrop overlay */}
+          <div 
+            className="fixed inset-0 bg-black/50 dark:bg-black/70 backdrop-blur-xs transition-opacity animate-fade-in"
+            onClick={() => setMobileMenuOpen(false)}
+          />
 
-              {/* Navigation Items in mobile drawer */}
-              <div className="space-y-1">
-                {navItems.map(item => {
-                  const isActive = location.pathname === item.path;
-                  return (
-                    <Link
-                      key={item.name}
-                      to={item.path}
-                      onClick={() => setMobileMenuOpen(false)}
-                      className={cn(
-                        "flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-semibold transition-all duration-150",
-                        isActive 
-                          ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950 shadow-sm"
-                          : "text-gray-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
-                      )}
-                    >
-                      <item.icon className="w-4 h-4 shrink-0" />
-                      <span>{item.name}</span>
-                    </Link>
-                  );
-                })}
+          {/* Bottom Sheet Container */}
+          <div 
+            style={{
+              paddingBottom: "max(20px, env(safe-area-inset-bottom, 20px))",
+              backdropFilter: "blur(20px)",
+              WebkitBackdropFilter: "blur(20px)"
+            }}
+            className="relative z-10 w-full bg-white/90 dark:bg-[#141418]/95 border-t border-white/60 dark:border-white/10 rounded-t-[32px] shadow-[0_-8px_32px_rgba(0,0,0,0.15)] p-5 max-h-[85vh] overflow-y-auto animate-in slide-in-from-bottom duration-300 glass-scrollbar"
+          >
+            {/* Grab handle indicator */}
+            <div className="w-12 h-1.5 bg-gray-300 dark:bg-zinc-700 rounded-full mx-auto mb-4" />
 
-                {isAdmin && (
-                  <>
-                    <div className="my-2 border-t border-gray-100 dark:border-zinc-800" />
-                    <Link
-                      to="/admin"
-                      onClick={() => setMobileMenuOpen(false)}
-                      className={cn(
-                        "flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-semibold transition-all duration-150",
-                        location.pathname === "/admin"
-                          ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950 shadow-sm"
-                          : "text-gray-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
-                      )}
-                    >
-                      <ShieldAlert className="w-4 h-4 shrink-0 text-amber-500" />
-                      <span>Admin Panel</span>
-                    </Link>
-                  </>
-                )}
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-gray-200/50 dark:border-white/10">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-xl border border-blue-500/20">
+                  <LayoutGrid className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-gray-900 dark:text-zinc-50 leading-tight">Barcha Bo'limlar</h3>
+                  <p className="text-[10px] text-gray-500 dark:text-zinc-400">Yuridik platformaning to'liq modullari</p>
+                </div>
               </div>
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen(false)}
+                className="p-2 text-gray-400 hover:text-gray-700 dark:hover:text-zinc-200 rounded-xl hover:bg-gray-100 dark:hover:bg-zinc-800 transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
 
-            {/* Bottom Actions of mobile drawer */}
-            <div className="space-y-3 pt-4 border-t border-gray-100 dark:border-zinc-800">
-              
-              <Link
-                to="/chat"
+            {/* 2-Column Compact Grid */}
+            <div className="grid grid-cols-2 gap-2.5 mb-5">
+              {[
+                { name: "Dashboard", desc: "Boshqaruv paneli", path: "/dashboard", icon: LayoutDashboard, color: "text-indigo-600 dark:text-indigo-400", bg: "bg-indigo-50 dark:bg-indigo-950/40" },
+                { name: "Research", desc: "Yuridik tahlil", path: "/research", icon: Bookmark, color: "text-amber-600 dark:text-amber-400", bg: "bg-amber-50 dark:bg-amber-950/40" },
+                { name: "Evidence", desc: "Dalillar bazasi", path: "/evidence", icon: Scale, color: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-50 dark:bg-emerald-950/40" },
+                { name: "Calendar", desc: "Taqvim va muddat", path: "/timeline", icon: Clock, color: "text-rose-600 dark:text-rose-400", bg: "bg-rose-50 dark:bg-rose-950/40" },
+                { name: "Templates", desc: "Hujjat andozalari", path: "/templates", icon: Sparkles, color: "text-purple-600 dark:text-purple-400", bg: "bg-purple-50 dark:bg-purple-950/40" },
+                { name: "Activity", desc: "Faoliyat jurnali", path: "/activity", icon: Calendar, color: "text-cyan-600 dark:text-cyan-400", bg: "bg-cyan-50 dark:bg-cyan-950/40" },
+                { name: "Settings", desc: "Sozlamalar", path: "/settings", icon: Settings, color: "text-blue-600 dark:text-blue-400", bg: "bg-blue-50 dark:bg-blue-950/40" },
+                ...(isAdmin ? [
+                  { name: "Admin", desc: "Admin Panel", path: "/admin", icon: ShieldAlert, color: "text-red-600 dark:text-red-400", bg: "bg-red-50 dark:bg-red-950/40" }
+                ] : [])
+              ].map(item => {
+                const isActive = location.pathname === item.path;
+                return (
+                  <Link
+                    key={item.path}
+                    to={item.path}
+                    onClick={() => setMobileMenuOpen(false)}
+                    className={cn(
+                      "flex items-center gap-2.5 p-3 rounded-2xl border transition-all text-xs select-none",
+                      isActive
+                        ? "bg-blue-50/90 dark:bg-blue-950/50 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 shadow-xs"
+                        : "bg-gray-50/70 dark:bg-white/5 hover:bg-gray-100 dark:hover:bg-white/10 border-gray-200/50 dark:border-white/5 text-gray-800 dark:text-zinc-200"
+                    )}
+                  >
+                    <div className={cn("p-2 rounded-xl shrink-0", item.bg, item.color)}>
+                      <item.icon className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <span className="font-bold block truncate text-xs">{item.name}</span>
+                      <span className="text-[10px] text-gray-500 dark:text-zinc-400 block truncate">{item.desc}</span>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+
+            {/* Profile & Footer controls */}
+            <div className="pt-3.5 border-t border-gray-200/50 dark:border-white/10 flex items-center justify-between gap-3">
+              <Link 
+                to="/settings" 
                 onClick={() => setMobileMenuOpen(false)}
-                className="flex items-center justify-center gap-2 px-3 py-2 text-xs font-bold text-white bg-zinc-900 dark:bg-zinc-800 hover:bg-zinc-800 dark:hover:bg-zinc-700 rounded-lg shadow-sm"
+                className="flex items-center gap-2.5 min-w-0 p-1 rounded-xl hover:bg-gray-100 dark:hover:bg-white/5 transition-all"
               >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Muloqot xonasi</span>
+                {user?.avatarUrl ? (
+                  <img
+                    src={user.avatarUrl}
+                    alt={user.displayName || "Profil"}
+                    className="w-9 h-9 rounded-full object-cover border border-gray-200 dark:border-zinc-700 shrink-0"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="w-9 h-9 rounded-full bg-blue-100 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 flex items-center justify-center font-bold text-xs shrink-0">
+                    <User className="w-4 h-4" />
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <span className="block font-bold text-xs text-gray-900 dark:text-white truncate">
+                    {user?.displayName || "Foydalanuvchi"}
+                  </span>
+                  <span className="block text-[10px] text-gray-500 dark:text-zinc-400 truncate">
+                    {user?.email || "Yuridik profil"}
+                  </span>
+                </div>
               </Link>
-              
-              <button
-                onClick={handleLogout}
-                className="w-full flex items-center gap-3 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg text-left"
-              >
-                <LogOut className="w-4 h-4 shrink-0" />
-                <span>Tizimdan chiqish</span>
-              </button>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={toggleTheme}
+                  className="p-2.5 text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-xl transition-all border border-gray-200/50 dark:border-white/10 cursor-pointer"
+                  title="Mavzu"
+                >
+                  {theme === "light" ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4 text-amber-400" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="p-2.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-xl transition-all border border-red-200/50 dark:border-red-900/30 cursor-pointer"
+                  title="Chiqish"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* 4. NATIVE-STYLE MOBILE BOTTOM NAVIGATION */}
-      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xl border-t border-gray-200 dark:border-zinc-800 pb-[env(safe-area-inset-bottom,0px)] shadow-lg select-none">
-        <div className="grid grid-cols-5 h-16 items-center px-1">
-          {/* 1. Muloqot */}
-          <Link
-            to="/chat"
-            className={cn(
-              "flex flex-col items-center justify-center min-h-[44px] py-1 transition-all",
-              (location.pathname === "/" || location.pathname === "/chat" || location.pathname === "/consultation")
-                ? "text-blue-600 dark:text-blue-400 font-bold"
-                : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200"
-            )}
-          >
-            <Sparkles className="w-5 h-5 shrink-0" />
-            <span className="text-[10px] mt-1 leading-none tracking-tight">Muloqot</span>
-          </Link>
+      {/* 4. LIQUID GLASS FLOATING MOBILE BOTTOM DOCK */}
+      <div 
+        className="lg:hidden fixed left-0 right-0 z-40 flex justify-center pointer-events-none px-3 sm:px-4"
+        style={{
+          bottom: "max(12px, env(safe-area-inset-bottom, 12px))"
+        }}
+      >
+        <nav 
+          style={{
+            backdropFilter: "blur(20px)",
+            WebkitBackdropFilter: "blur(20px)"
+          }}
+          className="pointer-events-auto w-full max-w-md bg-white/65 dark:bg-[#141418]/65 border border-white/60 dark:border-white/10 rounded-[26px] shadow-[0_8px_32px_rgba(0,0,0,0.12),0_2px_8px_rgba(0,0,0,0.06)] p-1.5 transition-all select-none"
+        >
+          <div className="grid grid-cols-5 items-center gap-1">
+            {/* 1. Chat */}
+            {(() => {
+              const isActive = location.pathname === "/" || location.pathname === "/chat" || location.pathname === "/consultation";
+              return (
+                <Link
+                  to="/chat"
+                  className={cn(
+                    "flex flex-col items-center justify-center min-h-[44px] py-1 px-0.5 rounded-[20px] transition-all duration-200 relative",
+                    isActive
+                      ? "bg-white/90 dark:bg-white/15 text-blue-600 dark:text-blue-400 font-bold scale-[1.02] shadow-xs"
+                      : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200 hover:bg-white/40 dark:hover:bg-white/5"
+                  )}
+                >
+                  <MessageSquare className={cn("w-[18px] h-[18px] shrink-0 transition-transform", isActive ? "stroke-[2.25]" : "stroke-[1.75]")} />
+                  <span className="text-[10px] mt-0.5 leading-none tracking-tight font-medium">Chat</span>
+                  {isActive && <span className="w-1 h-1 rounded-full bg-blue-600 dark:bg-blue-400 mt-0.5" />}
+                </Link>
+              );
+            })()}
 
-          {/* 2. Ishlar */}
-          <Link
-            to="/cases"
-            className={cn(
-              "flex flex-col items-center justify-center min-h-[44px] py-1 transition-all",
-              location.pathname === "/cases"
-                ? "text-blue-600 dark:text-blue-400 font-bold"
-                : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200"
-            )}
-          >
-            <Briefcase className="w-5 h-5 shrink-0" />
-            <span className="text-[10px] mt-1 leading-none tracking-tight">Ishlar</span>
-          </Link>
+            {/* 2. Cases */}
+            {(() => {
+              const isActive = location.pathname === "/cases";
+              return (
+                <Link
+                  to="/cases"
+                  className={cn(
+                    "flex flex-col items-center justify-center min-h-[44px] py-1 px-0.5 rounded-[20px] transition-all duration-200 relative",
+                    isActive
+                      ? "bg-white/90 dark:bg-white/15 text-blue-600 dark:text-blue-400 font-bold scale-[1.02] shadow-xs"
+                      : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200 hover:bg-white/40 dark:hover:bg-white/5"
+                  )}
+                >
+                  <Briefcase className={cn("w-[18px] h-[18px] shrink-0 transition-transform", isActive ? "stroke-[2.25]" : "stroke-[1.75]")} />
+                  <span className="text-[10px] mt-0.5 leading-none tracking-tight font-medium">Ishlar</span>
+                  {isActive && <span className="w-1 h-1 rounded-full bg-blue-600 dark:bg-blue-400 mt-0.5" />}
+                </Link>
+              );
+            })()}
 
-          {/* 3. Hujjatlar */}
-          <Link
-            to="/documents"
-            className={cn(
-              "flex flex-col items-center justify-center min-h-[44px] py-1 transition-all",
-              (location.pathname === "/documents" || location.pathname.startsWith("/result") || location.pathname.startsWith("/builder"))
-                ? "text-blue-600 dark:text-blue-400 font-bold"
-                : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200"
-            )}
-          >
-            <FileText className="w-5 h-5 shrink-0" />
-            <span className="text-[10px] mt-1 leading-none tracking-tight">Hujjatlar</span>
-          </Link>
+            {/* 3. Documents */}
+            {(() => {
+              const isActive = location.pathname === "/documents" || location.pathname.startsWith("/result") || location.pathname.startsWith("/builder");
+              return (
+                <Link
+                  to="/documents"
+                  className={cn(
+                    "flex flex-col items-center justify-center min-h-[44px] py-1 px-0.5 rounded-[20px] transition-all duration-200 relative",
+                    isActive
+                      ? "bg-white/90 dark:bg-white/15 text-blue-600 dark:text-blue-400 font-bold scale-[1.02] shadow-xs"
+                      : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200 hover:bg-white/40 dark:hover:bg-white/5"
+                  )}
+                >
+                  <FileText className={cn("w-[18px] h-[18px] shrink-0 transition-transform", isActive ? "stroke-[2.25]" : "stroke-[1.75]")} />
+                  <span className="text-[10px] mt-0.5 leading-none tracking-tight font-medium">Hujjatlar</span>
+                  {isActive && <span className="w-1 h-1 rounded-full bg-blue-600 dark:bg-blue-400 mt-0.5" />}
+                </Link>
+              );
+            })()}
 
-          {/* 4. Qidiruv */}
-          <Link
-            to="/search"
-            className={cn(
-              "flex flex-col items-center justify-center min-h-[44px] py-1 transition-all",
-              location.pathname === "/search"
-                ? "text-blue-600 dark:text-blue-400 font-bold"
-                : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200"
-            )}
-          >
-            <Search className="w-5 h-5 shrink-0" />
-            <span className="text-[10px] mt-1 leading-none tracking-tight">Qidiruv</span>
-          </Link>
+            {/* 4. Search */}
+            {(() => {
+              const isActive = location.pathname === "/search";
+              return (
+                <Link
+                  to="/search"
+                  className={cn(
+                    "flex flex-col items-center justify-center min-h-[44px] py-1 px-0.5 rounded-[20px] transition-all duration-200 relative",
+                    isActive
+                      ? "bg-white/90 dark:bg-white/15 text-blue-600 dark:text-blue-400 font-bold scale-[1.02] shadow-xs"
+                      : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200 hover:bg-white/40 dark:hover:bg-white/5"
+                  )}
+                >
+                  <Search className={cn("w-[18px] h-[18px] shrink-0 transition-transform", isActive ? "stroke-[2.25]" : "stroke-[1.75]")} />
+                  <span className="text-[10px] mt-0.5 leading-none tracking-tight font-medium">Qidiruv</span>
+                  {isActive && <span className="w-1 h-1 rounded-full bg-blue-600 dark:bg-blue-400 mt-0.5" />}
+                </Link>
+              );
+            })()}
 
-          {/* 5. Profil / Sozlamalar */}
-          <Link
-            to="/settings"
-            className={cn(
-              "flex flex-col items-center justify-center min-h-[44px] py-1 transition-all",
-              (location.pathname === "/settings" || location.pathname === "/profile")
-                ? "text-blue-600 dark:text-blue-400 font-bold"
-                : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200"
-            )}
-          >
-            <User className="w-5 h-5 shrink-0" />
-            <span className="text-[10px] mt-1 leading-none tracking-tight">Profil</span>
-          </Link>
-        </div>
-      </nav>
+            {/* 5. More / Profile */}
+            {(() => {
+              const isMoreActive = mobileMenuOpen || [
+                "/dashboard", "/research", "/evidence", "/timeline", 
+                "/calendar", "/templates", "/activity", "/settings", "/profile", "/admin"
+              ].includes(location.pathname);
+              return (
+                <button
+                  type="button"
+                  onClick={() => setMobileMenuOpen(prev => !prev)}
+                  className={cn(
+                    "flex flex-col items-center justify-center min-h-[44px] py-1 px-0.5 rounded-[20px] transition-all duration-200 relative cursor-pointer",
+                    isMoreActive
+                      ? "bg-white/90 dark:bg-white/15 text-blue-600 dark:text-blue-400 font-bold scale-[1.02] shadow-xs"
+                      : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200 hover:bg-white/40 dark:hover:bg-white/5"
+                  )}
+                >
+                  <LayoutGrid className={cn("w-[18px] h-[18px] shrink-0 transition-transform", isMoreActive ? "stroke-[2.25]" : "stroke-[1.75]")} />
+                  <span className="text-[10px] mt-0.5 leading-none tracking-tight font-medium">Yana</span>
+                  {isMoreActive && <span className="w-1 h-1 rounded-full bg-blue-600 dark:bg-blue-400 mt-0.5" />}
+                </button>
+              );
+            })()}
+          </div>
+        </nav>
+      </div>
 
     </div>
   );

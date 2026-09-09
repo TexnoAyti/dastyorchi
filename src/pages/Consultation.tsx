@@ -1313,7 +1313,7 @@ export function Consultation({ user }: { user: any }) {
   };
 
   return (
-    <div className="relative w-full h-auto min-h-[calc(100vh-4rem)] lg:h-[calc(100vh-4rem)] lg:max-h-[calc(100vh-4rem)] bg-gray-50 dark:bg-zinc-950 flex items-center justify-center font-sans tracking-tight overflow-y-auto lg:overflow-hidden">
+    <div className="relative w-full h-full min-h-0 bg-gray-50 dark:bg-zinc-950 flex items-center justify-center font-sans tracking-tight overflow-hidden">
       {/* Animated Background */}
       <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
         <div className="absolute top-[5%] left-[5%] w-[50vw] h-[50vw] bg-blue-400/20 rounded-full mix-blend-multiply filter blur-[100px] animate-blob" />
