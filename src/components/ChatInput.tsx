@@ -264,7 +264,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
   };
 
   return (
-    <div className="p-4 bg-white/30 backdrop-blur-md border-t border-white/40 relative">
+    <div className="p-3 sm:p-4 bg-white/30 backdrop-blur-md border-t border-white/40 relative w-full min-w-0">
       {speechError && (
         <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-red-500/90 text-white px-4 py-2 rounded-xl text-xs font-semibold shadow-xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2">
           {speechError}
@@ -287,7 +287,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
           ))}
         </div>
       )}
-      <form onSubmit={handleSubmit} className="flex gap-2 items-end">
+      <form onSubmit={handleSubmit} className="flex gap-1.5 sm:gap-2 items-end w-full min-w-0">
         <input 
           type="file" 
           multiple 
@@ -299,20 +299,20 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          className="p-3 rounded-[16px] flex items-center justify-center transition-all bg-white/60 hover:bg-white/90 text-blue-600 shadow-sm border border-white/50 cursor-pointer"
+          className="p-2.5 sm:p-3 min-w-[40px] sm:min-w-[44px] min-h-[44px] rounded-[16px] flex items-center justify-center transition-all bg-white/60 hover:bg-white/90 text-blue-600 shadow-sm border border-white/50 cursor-pointer shrink-0"
         >
-          <Paperclip className="w-5 h-5" />
+          <Paperclip className="w-4 sm:w-5 h-4 sm:h-5" />
         </button>
         <button
           type="button"
           onClick={toggleRecording}
-          className={`p-3 rounded-[16px] flex items-center justify-center transition-all shadow-sm border border-white/50 cursor-pointer ${
+          className={`p-2.5 sm:p-3 min-w-[40px] sm:min-w-[44px] min-h-[44px] rounded-[16px] flex items-center justify-center transition-all shadow-sm border border-white/50 cursor-pointer shrink-0 ${
             isRecording 
               ? "bg-red-500 text-white shadow-[0_0_20px_rgba(239,68,68,0.5)] border-red-400" 
               : "bg-white/60 hover:bg-white/90 text-blue-600"
           }`}
         >
-          {isRecording ? <MicOff className="w-5 h-5 animate-pulse" /> : <Mic className="w-5 h-5" />}
+          {isRecording ? <MicOff className="w-4 sm:w-5 h-4 sm:h-5 animate-pulse" /> : <Mic className="w-4 sm:w-5 h-4 sm:h-5" />}
         </button>
         <textarea
           ref={textareaRef}
@@ -321,18 +321,18 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
           onInput={autoResize}
           onKeyDown={handleKeyDown}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={isRecording ? "Listening..." : "Xabar yozing (Shift+Enter - yangi qator)..."}
-          className="flex-1 px-4 py-3 text-sm/relaxed bg-white/60 backdrop-blur-md border border-white/50 rounded-[20px] focus:ring-4 focus:ring-blue-500/20 focus:border-blue-500/50 outline-none resize-none overflow-y-auto glass-scrollbar shadow-inner text-gray-800 placeholder:text-gray-400 transition-all font-medium"
-          style={{ minHeight: '48px', maxHeight: '240px' }}
+          placeholder={isRecording ? "Listening..." : "Xabar yozing..."}
+          className="flex-1 min-w-0 px-3 sm:px-4 py-2.5 sm:py-3 text-sm/relaxed bg-white/60 backdrop-blur-md border border-white/50 rounded-[20px] focus:ring-4 focus:ring-blue-500/20 focus:border-blue-500/50 outline-none resize-none overflow-y-auto glass-scrollbar shadow-inner text-gray-800 placeholder:text-gray-400 transition-all font-medium"
+          style={{ minHeight: '44px', maxHeight: '160px' }}
           disabled={isLoading}
           autoFocus
         />
         <button
           type="submit"
           disabled={(!input.trim() && selectedFiles.length === 0) || isLoading}
-          className="p-3 bg-blue-600 text-white rounded-[16px] hover:bg-blue-700 hover:shadow-lg hover:shadow-blue-600/30 transition-all disabled:opacity-50 h-[48px] flex items-center justify-center cursor-pointer"
+          className="p-2.5 sm:p-3 min-w-[40px] sm:min-w-[44px] h-[44px] bg-blue-600 text-white rounded-[16px] hover:bg-blue-700 hover:shadow-lg hover:shadow-blue-600/30 transition-all disabled:opacity-50 flex items-center justify-center cursor-pointer shrink-0"
         >
-          <Send className="w-5 h-5" />
+          <Send className="w-4 sm:w-5 h-4 sm:h-5" />
         </button>
       </form>
       {aiMode === "document" && (

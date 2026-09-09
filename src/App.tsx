@@ -29,7 +29,6 @@ import { NotificationProvider } from "./contexts/NotificationContext";
 import { PaywallProvider } from "./contexts/PaywallContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { WifiOff } from "lucide-react";
-import { PipelineObservabilityPanel } from "./components/PipelineObservabilityPanel";
 
 function AppContent({ user }: { user: any }) {
   const location = useLocation();
@@ -101,23 +100,6 @@ function AppContent({ user }: { user: any }) {
     </Routes>
   );
 
-  const debugOverlay = user && (
-    <div className="fixed bottom-4 right-4 z-[9999] bg-slate-900/90 backdrop-blur-md border border-slate-800 text-white p-3.5 rounded-2xl shadow-xl flex flex-col gap-1.5 text-[10px] font-mono max-w-xs transition-all pointer-events-none opacity-90 select-none">
-      <div className="flex items-center gap-1.5 border-b border-slate-800 pb-1.5 mb-1 text-slate-400 font-bold uppercase tracking-wider text-[8px]">
-        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-        Yuridik Tizim Debugger
-      </div>
-      <div>
-        <span className="text-slate-400 block font-bold uppercase tracking-wide text-[8px]">Current Route:</span>
-        <span className="text-emerald-400 font-extrabold text-[11px] block truncate mt-0.5">{location.pathname + location.search}</span>
-      </div>
-      <div>
-        <span className="text-slate-400 block font-bold uppercase tracking-wide text-[8px]">Destination Route:</span>
-        <span className="text-indigo-400 font-extrabold text-[11px] block truncate mt-0.5">{destinationRoute || location.pathname}</span>
-      </div>
-    </div>
-  );
-
   const offlineBanner = !isOnline && (
     <div className="fixed bottom-6 left-6 z-[999999] bg-amber-600 text-white px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-3 animate-bounce border border-amber-500 max-w-sm">
       <div className="w-8 h-8 rounded-full bg-amber-500/20 flex items-center justify-center shrink-0">
@@ -134,13 +116,11 @@ function AppContent({ user }: { user: any }) {
 
   if (isHideNavbar) {
     return (
-      <div className="h-screen w-screen flex flex-col bg-gray-50 dark:bg-zinc-950 overflow-hidden relative">
+      <div className="min-h-[100dvh] h-[100dvh] w-full max-w-full flex flex-col bg-gray-50 dark:bg-zinc-950 overflow-hidden relative">
         <main className="flex-1 min-h-0 min-w-0 h-full w-full overflow-hidden">
           {routesElement}
         </main>
-        {debugOverlay}
         {offlineBanner}
-        <PipelineObservabilityPanel />
       </div>
     );
   }
@@ -148,9 +128,7 @@ function AppContent({ user }: { user: any }) {
   return (
     <Navbar user={user}>
       {routesElement}
-      {debugOverlay}
       {offlineBanner}
-      <PipelineObservabilityPanel />
     </Navbar>
   );
 }

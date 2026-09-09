@@ -66,8 +66,8 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(cors());
-  app.use(express.json({ limit: '100mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '100mb' }));
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
   // API routes FIRST
   app.get("/api/health", (req, res) => {
@@ -81,12 +81,9 @@ async function startServer() {
       
       apiKey = customApiKey?.trim() || process.env.GEMINI_API_KEY?.trim() || "";
       if (!apiKey || apiKey === "MY_GEMINI_API_KEY" || apiKey === "your_real_key_here") {
-        apiKey = "AIzaSyCNGyrLJQ3v40i47qd9OdlkJmsJ5uc-NvY";
-      }
-
-      // Check again just in case (should not happen)
-      if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
-        throw new Error("API kaliti kiritilmagan! Loyiha muhitida (Secrets yoki .env) kalitni sozlang.");
+        return res.status(401).json({
+          error: "GEMINI_API_KEY sozlanmagan. Iltimos, server muhitida GEMINI_API_KEY o'zgaruvchisini sozlang."
+        });
       }
 
       // Private mode support - do not log or store contents if private
@@ -186,14 +183,20 @@ async function startServer() {
 
       if (paymentMethod === "payme") {
         // Payme redirect parameter base64 generation
-        const PAYME_MERCHANT_ID = process.env.PAYME_MERCHANT_ID || "65e9bad488c9cf0abbeef001";
+        const PAYME_MERCHANT_ID = process.env.PAYME_MERCHANT_ID;
+        if (!PAYME_MERCHANT_ID) {
+          return res.status(503).json({ error: "Payme to'lov tizimi sozlanmagan (PAYME_MERCHANT_ID yetishmaydi)." });
+        }
         const rawString = `m=${PAYME_MERCHANT_ID};ac.userId=${userId};a=${amountTiyins}`;
         const base64Params = Buffer.from(rawString).toString("base64");
         checkoutUrl = `https://checkout.payme.uz/${base64Params}`;
       } else if (paymentMethod === "click") {
         // Click redirect URL generation
-        const CLICK_SERVICE_ID = process.env.CLICK_SERVICE_ID || "33344";
-        const CLICK_MERCHANT_ID = process.env.CLICK_MERCHANT_ID || "22211";
+        const CLICK_SERVICE_ID = process.env.CLICK_SERVICE_ID;
+        const CLICK_MERCHANT_ID = process.env.CLICK_MERCHANT_ID;
+        if (!CLICK_SERVICE_ID || !CLICK_MERCHANT_ID) {
+          return res.status(503).json({ error: "Click to'lov tizimi sozlanmagan (CLICK_SERVICE_ID yoki CLICK_MERCHANT_ID yetishmaydi)." });
+        }
         const defaultReturnUrl = "https://ais-dev-kje5inn53jtlikkyhcll5k-489215624706.asia-southeast1.run.app/profile";
         const finalReturnUrl = returnUrl || defaultReturnUrl;
 
@@ -229,12 +232,15 @@ async function startServer() {
       console.log("CLICK webhook payload:", req.body);
 
       // Verify MD5 Merchant Signature
-      const CLICK_MERCHANT_KEY = process.env.CLICK_MERCHANT_KEY || "CLICK_TEST_SECRET_KEY";
+      const CLICK_MERCHANT_KEY = process.env.CLICK_MERCHANT_KEY;
+      if (!CLICK_MERCHANT_KEY) {
+        console.error("CLICK_MERCHANT_KEY is not configured on server.");
+        return res.status(503).json({ error: -1, error_note: "Click merchant key not configured on server" });
+      }
       const dataToSign = `${click_trans_id}${service_id}${click_paydoc_id}${merchant_trans_id}${amount}${action}${sign_time}${CLICK_MERCHANT_KEY}`;
       const calculatedSign = crypto.createHash("md5").update(dataToSign).digest("hex");
 
-      const isDefaultKey = CLICK_MERCHANT_KEY === "CLICK_TEST_SECRET_KEY";
-      if (!isDefaultKey && calculatedSign !== sign_string) {
+      if (calculatedSign !== sign_string) {
         console.error("Click webhook signature invalid. Received:", sign_string, "Expected:", calculatedSign);
         return res.json({
           error: -1,
@@ -301,19 +307,32 @@ async function startServer() {
       console.log(`PAYME Webhook method context: ${method}`, params);
 
       // Verify Auth Header
-      const PAYME_MERCHANT_KEY = process.env.PAYME_MERCHANT_KEY || "PAYME_TEST_KEY";
+      const PAYME_MERCHANT_KEY = process.env.PAYME_MERCHANT_KEY;
+      if (!PAYME_MERCHANT_KEY) {
+        console.error("PAYME_MERCHANT_KEY is not configured on server.");
+        return res.status(503).json({
+          jsonrpc: "2.0",
+          error: { code: -32504, message: "Payme merchant key not configured on server" },
+          id: jsonRpcId
+        });
+      }
       const authHeader = req.headers.authorization;
-      if (authHeader && PAYME_MERCHANT_KEY !== "PAYME_TEST_KEY") {
-        const base64Creds = authHeader.split(" ")[1];
-        const creds = Buffer.from(base64Creds, "base64").toString("ascii");
-        const password = creds.split(":")[1];
-        if (password !== PAYME_MERCHANT_KEY) {
-          return res.status(200).json({
-            jsonrpc: "2.0",
-            error: { code: -32504, message: "Unauthorized merchant identification key" },
-            id: jsonRpcId
-          });
-        }
+      if (!authHeader) {
+        return res.status(200).json({
+          jsonrpc: "2.0",
+          error: { code: -32504, message: "Unauthorized merchant identification key" },
+          id: jsonRpcId
+        });
+      }
+      const base64Creds = authHeader.split(" ")[1] || "";
+      const creds = Buffer.from(base64Creds, "base64").toString("ascii");
+      const password = creds.split(":")[1] || "";
+      if (password !== PAYME_MERCHANT_KEY) {
+        return res.status(200).json({
+          jsonrpc: "2.0",
+          error: { code: -32504, message: "Unauthorized merchant identification key" },
+          id: jsonRpcId
+        });
       }
 
       if (!dbAdmin) {

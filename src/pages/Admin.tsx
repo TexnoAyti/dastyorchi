@@ -10,7 +10,8 @@ import {
 import { db, auth } from "../firebase";
 import { 
   doc, getDoc, setDoc, updateDoc, collection, 
-  getDocs, addDoc, deleteDoc, serverTimestamp 
+  getDocs, addDoc, deleteDoc, serverTimestamp,
+  query, limit, orderBy
 } from "firebase/firestore";
 import { 
   getPlanLimits, savePlanLimits, PlanLimits, DEFAULT_PLAN_LIMITS, SubscriptionTier 
@@ -54,6 +55,12 @@ export function AdminPanel({ user }: { user?: any }) {
   const [userSearchQuery, setUserSearchQuery] = useState("");
   const [paymentStatusFilter, setPaymentStatusFilter] = useState<"all" | "pending" | "approved" | "declined">("all");
 
+  // Pagination states
+  const [userPage, setUserPage] = useState(1);
+  const [paymentPage, setPaymentPage] = useState(1);
+  const USERS_PER_PAGE = 25;
+  const PAYMENTS_PER_PAGE = 25;
+
   // Selected for edits
   const [selectedUser, setSelectedUser] = useState<any | null>(null);
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
@@ -80,16 +87,18 @@ export function AdminPanel({ user }: { user?: any }) {
   const loadAllData = async () => {
     setLoadingStats(true);
     try {
-      // 1. Fetch Users
-      const usersSnap = await getDocs(collection(db, "users"));
+      // 1. Fetch Users (Hardened with limit to prevent excessive reads)
+      const usersQuery = query(collection(db, "users"), limit(200));
+      const usersSnap = await getDocs(usersQuery);
       const usersList: any[] = [];
       usersSnap.forEach((docSnap) => {
         usersList.push({ id: docSnap.id, ...docSnap.data() });
       });
       setUsers(usersList);
 
-      // 2. Fetch Payments
-      const paySnap = await getDocs(collection(db, "paymentRequests"));
+      // 2. Fetch Payments (Hardened with limit to prevent excessive reads)
+      const payQuery = query(collection(db, "paymentRequests"), limit(200));
+      const paySnap = await getDocs(payQuery);
       const payList: any[] = paySnap.docs.map(d => ({ id: d.id, ...d.data() }));
       payList.sort((a, b) => {
         const t1 = a.createdAt?.seconds || 0;
@@ -127,9 +136,10 @@ export function AdminPanel({ user }: { user?: any }) {
       const matrixLimits = await getPlanLimits();
       setPlanLimits(matrixLimits);
 
-      // 6. Fetch System Logs for the Error Monitor Dashboard
+      // 6. Fetch System Logs for the Error Monitor Dashboard (Hardened with limit)
       try {
-        const logsSnap = await getDocs(collection(db, "system_logs"));
+        const logsQuery = query(collection(db, "system_logs"), limit(50));
+        const logsSnap = await getDocs(logsQuery);
         const logsList: any[] = [];
         logsSnap.forEach((docSnap) => {
           logsList.push({ id: docSnap.id, ...docSnap.data() });
@@ -477,14 +487,22 @@ export function AdminPanel({ user }: { user?: any }) {
     );
   });
 
+  // User pagination
+  const totalUserPages = Math.max(1, Math.ceil(filteredUsers.length / USERS_PER_PAGE));
+  const paginatedUsers = filteredUsers.slice((userPage - 1) * USERS_PER_PAGE, userPage * USERS_PER_PAGE);
+
   // InMemory payment filter
   const filteredPayments = payments.filter(p => {
     if (paymentStatusFilter === "all") return true;
     return p.status === paymentStatusFilter;
   });
 
+  // Payment pagination
+  const totalPaymentPages = Math.max(1, Math.ceil(filteredPayments.length / PAYMENTS_PER_PAGE));
+  const paginatedPayments = filteredPayments.slice((paymentPage - 1) * PAYMENTS_PER_PAGE, paymentPage * PAYMENTS_PER_PAGE);
+
   return (
-    <div className="h-screen w-screen bg-slate-950 flex flex-col lg:flex-row text-white select-none relative font-sans overflow-hidden">
+    <div className="min-h-[100dvh] h-[100dvh] w-full max-w-full bg-slate-950 flex flex-col lg:flex-row text-white select-none relative font-sans overflow-hidden">
       
       {/* Mobile Header Nav bar */}
       <div className="lg:hidden flex items-center justify-between px-6 py-4 bg-slate-900 border-b border-white/10 shrink-0">
@@ -835,7 +853,7 @@ export function AdminPanel({ user }: { user?: any }) {
                         </td>
                       </tr>
                     ) : (
-                      filteredUsers.slice(0, 50).map((u) => {
+                      paginatedUsers.map((u) => {
                         const isBlocked = u.blocked === true;
                         return (
                           <tr key={u.id} className="hover:bg-white/5 transition-colors">
@@ -925,8 +943,33 @@ export function AdminPanel({ user }: { user?: any }) {
                   </tbody>
                 </table>
               </div>
-              <div className="p-4 bg-slate-950 border-t border-white/10 text-[10px] text-slate-500 font-bold text-center">
-                Mijozlar ro'yxatining boshlang'ich 50 tasi ko'rsatilmoqda. Kerakli odamni topish uchun yuqoridagi tezkor izlovchini represents qiling.
+              
+              {/* Pagination Bar */}
+              <div className="p-4 bg-slate-950 border-t border-white/10 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+                <span className="text-slate-400 text-[11px] font-semibold">
+                  Jami <span className="text-white font-bold">{filteredUsers.length}</span> tadan {filteredUsers.length > 0 ? (userPage - 1) * USERS_PER_PAGE + 1 : 0} - {Math.min(userPage * USERS_PER_PAGE, filteredUsers.length)} ko'rsatilmoqda
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setUserPage(p => Math.max(1, p - 1))}
+                    disabled={userPage <= 1}
+                    className="px-3 py-1.5 bg-slate-900 border border-white/10 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-xs font-bold"
+                  >
+                    Oldingi
+                  </button>
+                  <span className="px-3 py-1 bg-slate-900 border border-white/5 rounded-xl text-slate-300 font-mono text-xs font-bold">
+                    {userPage} / {totalUserPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setUserPage(p => Math.min(totalUserPages, p + 1))}
+                    disabled={userPage >= totalUserPages}
+                    className="px-3 py-1.5 bg-slate-900 border border-white/10 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-xs font-bold"
+                  >
+                    Keyingi
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -1529,7 +1572,7 @@ export function AdminPanel({ user }: { user?: any }) {
               </div>
             ) : (
               <div className="space-y-4">
-                {filteredPayments.map((p) => {
+                {paginatedPayments.map((p) => {
                   const isPending = p.status === "pending";
                   return (
                     <div 
@@ -1617,6 +1660,34 @@ export function AdminPanel({ user }: { user?: any }) {
                     </div>
                   );
                 })}
+
+                {/* Payment Pagination Bar */}
+                <div className="p-4 bg-slate-950 border border-white/10 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+                  <span className="text-slate-400 text-[11px] font-semibold">
+                    Jami <span className="text-white font-bold">{filteredPayments.length}</span> tadan {filteredPayments.length > 0 ? (paymentPage - 1) * PAYMENTS_PER_PAGE + 1 : 0} - {Math.min(paymentPage * PAYMENTS_PER_PAGE, filteredPayments.length)} ko'rsatilmoqda
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPaymentPage(p => Math.max(1, p - 1))}
+                      disabled={paymentPage <= 1}
+                      className="px-3 py-1.5 bg-slate-900 border border-white/10 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-xs font-bold"
+                    >
+                      Oldingi
+                    </button>
+                    <span className="px-3 py-1 bg-slate-900 border border-white/5 rounded-xl text-slate-300 font-mono text-xs font-bold">
+                      {paymentPage} / {totalPaymentPages}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setPaymentPage(p => Math.min(totalPaymentPages, p + 1))}
+                      disabled={paymentPage >= totalPaymentPages}
+                      className="px-3 py-1.5 bg-slate-900 border border-white/10 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-xs font-bold"
+                    >
+                      Keyingi
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 

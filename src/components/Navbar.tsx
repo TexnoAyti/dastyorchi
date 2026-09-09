@@ -164,7 +164,7 @@ export function Navbar({ user, children }: { user: any; children?: React.ReactNo
   };
 
   return (
-    <div className="h-screen w-screen flex flex-row bg-[var(--bg-secondary)] font-sans overflow-hidden transition-colors duration-200 text-[var(--text-primary)] relative">
+    <div className="min-h-[100dvh] h-[100dvh] w-full max-w-full flex flex-row bg-[var(--bg-secondary)] font-sans overflow-hidden transition-colors duration-200 text-[var(--text-primary)] relative">
       
       {/* 1. PERMANENT LEFT SIDEBAR FOR DESKTOP */}
       <aside className={cn(
@@ -259,7 +259,7 @@ export function Navbar({ user, children }: { user: any; children?: React.ReactNo
                 <img
                   src={user.avatarUrl}
                   alt={user.displayName || "Siz"}
-                  className="w-8 h-8 rounded-full border border-gray-200 dark:border-zinc-720 object-cover shrink-0"
+                  className="w-8 h-8 rounded-full border border-gray-200 dark:border-zinc-700 object-cover shrink-0"
                   referrerPolicy="no-referrer"
                 />
               ) : (
@@ -367,12 +367,12 @@ export function Navbar({ user, children }: { user: any; children?: React.ReactNo
             )}
 
             {/* Page title */}
-            <h1 className="text-sm sm:text-base font-bold text-gray-900 dark:text-zinc-50 tracking-tight">
+            <h1 className="text-sm sm:text-base font-bold text-gray-900 dark:text-zinc-50 tracking-tight truncate max-w-[130px] xs:max-w-[190px] sm:max-w-xs md:max-w-none">
               {getPageTitle()}
             </h1>
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
             
             {/* Quick Consultation trigger */}
             {location.pathname !== "/chat" && (
@@ -392,7 +392,7 @@ export function Navbar({ user, children }: { user: any; children?: React.ReactNo
                 title={t.common.language}
               >
                 <Globe className="w-4 h-4 text-zinc-800 dark:text-zinc-200" />
-                <span className="text-[10px] font-bold uppercase">{language.replace("uz_lat", "uz").replace("uz_cyr", "ўз").replace("ru", "ru").replace("en", "en")}</span>
+                <span className="text-[10px] font-bold uppercase hidden xs:inline">{language.replace("uz_lat", "uz").replace("uz_cyr", "ўз").replace("ru", "ru").replace("en", "en")}</span>
               </button>
               
               <div className="absolute right-0 mt-2.5 w-44 bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-xl shadow-xl z-[200] hidden group-hover:block hover:block">
@@ -472,7 +472,7 @@ export function Navbar({ user, children }: { user: any; children?: React.ReactNo
               </button>
 
               {showNotifications && (
-                <div className="absolute right-0 mt-2.5 w-80 bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-xl shadow-xl z-[150] overflow-hidden">
+                <div className="absolute right-0 mt-2.5 w-[calc(100vw-2rem)] sm:w-80 max-w-sm bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-xl shadow-xl z-[150] overflow-hidden">
                   <div className="px-4 py-2.5 border-b border-gray-100 dark:border-zinc-800 flex items-center justify-between bg-gray-50/50 dark:bg-zinc-900/60">
                     <span className="font-bold text-xs text-gray-900 dark:text-zinc-100">Bildirishnomalar</span>
                     <button onClick={markAllAsRead} className="text-[10px] font-bold text-zinc-900 dark:text-zinc-200 hover:underline">O'qildi</button>
@@ -525,8 +525,8 @@ export function Navbar({ user, children }: { user: any; children?: React.ReactNo
         <main className={cn(
           "flex-1 min-h-0 min-w-0 h-full w-full bg-[var(--bg-secondary)] relative transition-colors duration-200",
           location.pathname.startsWith("/result") || location.pathname === "/chat" || location.pathname === "/consultation" || location.pathname.startsWith("/builder")
-            ? "overflow-hidden"
-            : "overflow-y-auto"
+            ? "overflow-hidden pb-[calc(4rem+env(safe-area-inset-bottom,0px))] lg:pb-0"
+            : "overflow-y-auto pb-[calc(4.5rem+env(safe-area-inset-bottom,0px))] lg:pb-0"
         )}>
           {children}
         </main>
@@ -593,7 +593,7 @@ export function Navbar({ user, children }: { user: any; children?: React.ReactNo
             </div>
 
             {/* Bottom Actions of mobile drawer */}
-            <div className="space-y-3 pt-4 border-t border-gray-100 dark:border-zinc-80s">
+            <div className="space-y-3 pt-4 border-t border-gray-100 dark:border-zinc-800">
               
               <Link
                 to="/chat"
@@ -615,6 +615,81 @@ export function Navbar({ user, children }: { user: any; children?: React.ReactNo
           </div>
         </div>
       )}
+
+      {/* 4. NATIVE-STYLE MOBILE BOTTOM NAVIGATION */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xl border-t border-gray-200 dark:border-zinc-800 pb-[env(safe-area-inset-bottom,0px)] shadow-lg select-none">
+        <div className="grid grid-cols-5 h-16 items-center px-1">
+          {/* 1. Muloqot */}
+          <Link
+            to="/chat"
+            className={cn(
+              "flex flex-col items-center justify-center min-h-[44px] py-1 transition-all",
+              (location.pathname === "/" || location.pathname === "/chat" || location.pathname === "/consultation")
+                ? "text-blue-600 dark:text-blue-400 font-bold"
+                : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200"
+            )}
+          >
+            <Sparkles className="w-5 h-5 shrink-0" />
+            <span className="text-[10px] mt-1 leading-none tracking-tight">Muloqot</span>
+          </Link>
+
+          {/* 2. Ishlar */}
+          <Link
+            to="/cases"
+            className={cn(
+              "flex flex-col items-center justify-center min-h-[44px] py-1 transition-all",
+              location.pathname === "/cases"
+                ? "text-blue-600 dark:text-blue-400 font-bold"
+                : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200"
+            )}
+          >
+            <Briefcase className="w-5 h-5 shrink-0" />
+            <span className="text-[10px] mt-1 leading-none tracking-tight">Ishlar</span>
+          </Link>
+
+          {/* 3. Hujjatlar */}
+          <Link
+            to="/documents"
+            className={cn(
+              "flex flex-col items-center justify-center min-h-[44px] py-1 transition-all",
+              (location.pathname === "/documents" || location.pathname.startsWith("/result") || location.pathname.startsWith("/builder"))
+                ? "text-blue-600 dark:text-blue-400 font-bold"
+                : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200"
+            )}
+          >
+            <FileText className="w-5 h-5 shrink-0" />
+            <span className="text-[10px] mt-1 leading-none tracking-tight">Hujjatlar</span>
+          </Link>
+
+          {/* 4. Qidiruv */}
+          <Link
+            to="/search"
+            className={cn(
+              "flex flex-col items-center justify-center min-h-[44px] py-1 transition-all",
+              location.pathname === "/search"
+                ? "text-blue-600 dark:text-blue-400 font-bold"
+                : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200"
+            )}
+          >
+            <Search className="w-5 h-5 shrink-0" />
+            <span className="text-[10px] mt-1 leading-none tracking-tight">Qidiruv</span>
+          </Link>
+
+          {/* 5. Profil / Sozlamalar */}
+          <Link
+            to="/settings"
+            className={cn(
+              "flex flex-col items-center justify-center min-h-[44px] py-1 transition-all",
+              (location.pathname === "/settings" || location.pathname === "/profile")
+                ? "text-blue-600 dark:text-blue-400 font-bold"
+                : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200"
+            )}
+          >
+            <User className="w-5 h-5 shrink-0" />
+            <span className="text-[10px] mt-1 leading-none tracking-tight">Profil</span>
+          </Link>
+        </div>
+      </nav>
 
     </div>
   );

@@ -26,9 +26,23 @@
 
 
 /* Base default colors configuration using design tokens */
+html,
+body,
+#root {
+  min-height: 100dvh;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 html {
   background-color: var(--bg-primary);
   color: var(--text-primary);
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+body {
+  position: relative;
 }
 
 

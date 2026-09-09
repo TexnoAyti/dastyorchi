@@ -61,7 +61,7 @@ export const DocumentEditor = memo(function DocumentEditor({ content, onChange, 
     },
     editorProps: {
       attributes: {
-        class: 'prose dark:prose-invert prose-sm sm:prose lg:prose-lg xl:prose-2xl mx-auto focus:outline-none min-h-[800px] bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 p-4 sm:p-12 shadow-sm border border-gray-200 dark:border-zinc-800',
+        class: 'prose dark:prose-invert prose-sm sm:prose lg:prose-lg xl:prose-2xl mx-auto focus:outline-none min-h-[400px] sm:min-h-[800px] bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 p-3 sm:p-12 shadow-sm border border-gray-200 dark:border-zinc-800 rounded-lg sm:rounded-none',
       },
     },
   });
@@ -273,8 +273,8 @@ export const DocumentEditor = memo(function DocumentEditor({ content, onChange, 
       style={{ minHeight: "450px", border: "1px solid rgba(255,255,255,0.08)", display: "flex", flexDirection: "column", visibility: "visible", opacity: 1 }}
     >
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800">
-        <div className="flex items-center gap-1">
+      <div className="flex items-center justify-between gap-2 p-2 sm:p-3 bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800 overflow-x-auto no-scrollbar shrink-0">
+        <div className="flex items-center gap-1 shrink-0">
           <button
             onClick={() => editor.chain().focus().toggleBold().run()}
             className={`p-2 rounded hover:bg-gray-100 dark:hover:bg-zinc-800 ${editor.isActive('bold') ? 'bg-gray-200 text-blue-600 dark:bg-zinc-700 dark:text-blue-400' : 'text-gray-600 dark:text-zinc-400'}`}
@@ -410,9 +410,9 @@ export const DocumentEditor = memo(function DocumentEditor({ content, onChange, 
       </div>
 
       {/* Editor Area */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-gray-100 dark:bg-zinc-950">
+      <div className="flex-1 overflow-y-auto p-2 sm:p-8 bg-gray-100 dark:bg-zinc-950">
         <div 
-          className="w-full max-w-[210mm] mx-auto transition-all duration-200 ease-in-out" 
+          className="w-full max-w-full sm:max-w-[210mm] mx-auto transition-all duration-200 ease-in-out" 
           ref={editorRef}
           style={{ zoom: `${zoom}%`, transformOrigin: 'top center' }}
         >

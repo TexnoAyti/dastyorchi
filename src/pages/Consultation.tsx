@@ -3,7 +3,7 @@ import { extractRawText } from "mammoth";
 import { motion } from "framer-motion";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { signOut } from "firebase/auth";
-import { Send, Bot, User, Scale, AlertCircle, Mic, MicOff, FileText, Download, TrendingUp, X, Plus, MessageSquare, Paperclip, ListChecks, Ghost, Briefcase, ChevronDown, CheckCircle, Lock, AlertTriangle, LogOut, Settings, LayoutDashboard, Crown, Volume2, VolumeX, Bell } from "lucide-react";
+import { Send, Bot, User, Scale, AlertCircle, Mic, MicOff, FileText, Download, TrendingUp, X, Plus, MessageSquare, Paperclip, ListChecks, Ghost, Briefcase, ChevronDown, CheckCircle, Lock, AlertTriangle, LogOut, Settings, LayoutDashboard, Crown, Volume2, VolumeX, Bell, History } from "lucide-react";
 import html2pdf from "html2pdf.js";
 import { chatWithLawyer, generateHTMLDocument, generateChatTitle } from "../services/aiService";
 import { Language, RiskAnalysis, Case, PersonProfile, ChatSession, ChatMessage } from "../types";
@@ -441,6 +441,7 @@ export function Consultation({ user }: { user: any }) {
   }, [language, lt.welcome]);
 
   const chatInputRef = useRef<ChatInputRef>(null);
+  const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [retryMessage, setRetryMessage] = useState("");
   const [isGeneratingDoc, setIsGeneratingDoc] = useState(false);
@@ -1320,9 +1321,9 @@ export function Consultation({ user }: { user: any }) {
         <div className="absolute -bottom-[10%] left-[20%] w-[60vw] h-[60vw] bg-purple-400/20 rounded-full mix-blend-multiply filter blur-[100px] animate-blob animation-delay-4000" />
       </div>
 
-      <div className="relative z-10 w-full max-w-[1800px] mx-auto p-4 sm:p-5 lg:p-6 xl:p-8 h-full flex flex-col lg:flex-row gap-6 min-h-0 overflow-y-auto lg:overflow-hidden box-border">
-        {/* Sidebar: Chat History */}
-        <div className="w-full lg:w-[280px] flex-shrink-0 flex flex-col bg-white/40 backdrop-blur-[24px] rounded-[32px] border border-white/50 shadow-[0_8px_40px_rgba(0,0,0,0.04)] overflow-hidden h-auto max-h-[350px] lg:max-h-none lg:h-full transition-all duration-500">
+      <div className="relative z-10 w-full max-w-[1800px] mx-auto p-2 sm:p-4 lg:p-6 xl:p-8 h-full flex flex-col lg:flex-row gap-4 lg:gap-6 min-h-0 overflow-hidden box-border">
+        {/* Desktop Sidebar: Chat History */}
+        <div className="hidden lg:flex lg:w-[280px] flex-shrink-0 flex-col bg-white/40 backdrop-blur-[24px] rounded-[32px] border border-white/50 shadow-[0_8px_40px_rgba(0,0,0,0.04)] overflow-hidden lg:h-full transition-all duration-500">
           <div className="flex flex-col gap-3 p-5 border-b border-white/30">
             <button
               onClick={startNewChat}
@@ -1497,17 +1498,109 @@ export function Consultation({ user }: { user: any }) {
         </div>
       </div>
 
+      {/* Mobile History Drawer */}
+      {mobileHistoryOpen && (
+        <div className="lg:hidden fixed inset-0 z-50 flex">
+          {/* Backdrop overlay */}
+          <div 
+            className="fixed inset-0 bg-black/50 backdrop-blur-xs transition-opacity"
+            onClick={() => setMobileHistoryOpen(false)}
+          />
+          {/* Drawer Content */}
+          <div className="relative z-10 w-[85vw] max-w-[320px] bg-[#f8fafc]/95 backdrop-blur-2xl border-r border-white/60 shadow-2xl h-full flex flex-col p-4 animate-in slide-in-from-left duration-300">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-200/50">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-blue-500 text-white rounded-xl shadow-xs">
+                  <History className="w-4 h-4" />
+                </div>
+                <span className="font-bold text-gray-900 text-sm">{lt.history || "Suhbatlar Tarixi"}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMobileHistoryOpen(false)}
+                className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="py-3">
+              <button
+                type="button"
+                onClick={() => {
+                  startNewChat();
+                  setMobileHistoryOpen(false);
+                }}
+                className="w-full py-2.5 px-3 bg-blue-600 text-white font-semibold rounded-xl hover:bg-blue-700 transition-all flex items-center justify-center gap-2 shadow-sm text-xs cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                {lt.new_chat}
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 glass-scrollbar">
+              {chatSessions.length === 0 ? (
+                <div className="text-center py-8 text-xs text-gray-400 font-medium">
+                  {lt.no_history}
+                </div>
+              ) : (
+                chatSessions.map(chat => (
+                  <button
+                    key={chat.id}
+                    type="button"
+                    onClick={() => {
+                      openChat(chat);
+                      setMobileHistoryOpen(false);
+                    }}
+                    className={`w-full text-left px-3 py-2.5 rounded-xl text-xs transition-all flex items-center gap-2.5 cursor-pointer ${
+                      currentChatId === chat.id 
+                        ? "bg-blue-50 text-blue-700 font-bold border border-blue-200 shadow-xs" 
+                        : "text-gray-600 hover:bg-gray-100/60"
+                    }`}
+                  >
+                    <MessageSquare className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span className="truncate">{chat.title}</span>
+                  </button>
+                ))
+              )}
+            </div>
+
+            {/* Drawer Footer info */}
+            <div className="pt-3 border-t border-gray-200/50 text-[11px] text-gray-500 font-medium">
+              <div className="flex justify-between items-center mb-1">
+                <span>{lt.limits}:</span>
+                <span className="font-bold text-gray-800">{requestsCountToday} / {userTier === "free" ? "10" : lt.unlimited}</span>
+              </div>
+              <div className="w-full bg-gray-200 h-1.5 rounded-full overflow-hidden">
+                <div 
+                  className="bg-blue-600 h-full rounded-full" 
+                  style={{ width: `${userTier === "free" ? Math.min(100, (requestsCountToday / 10) * 100) : 100}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Wrapper for Chat and Editor to manage dynamic split layout */}
       <div className="flex-1 flex flex-col lg:flex-row gap-6 min-h-0 min-w-0 h-full">
         {/* Middle Panel: Chat */}
-        <div className={`w-full ${aiMode === "study" || !editorOpen ? "lg:flex-1" : "lg:w-[40%] shrink-0"} flex flex-col bg-white/40 backdrop-blur-[24px] rounded-[32px] border border-white/50 shadow-[0_8px_40px_rgba(0,0,0,0.04)] overflow-hidden h-[500px] lg:h-full min-h-0 relative transition-all duration-300`}>
-          <div className="p-5 border-b border-white/30 bg-white/20 flex flex-col gap-4">
+        <div className={`w-full ${aiMode === "study" || !editorOpen ? "lg:flex-1" : "lg:w-[40%] shrink-0"} flex-1 flex flex-col bg-white/40 backdrop-blur-[24px] rounded-[28px] sm:rounded-[32px] border border-white/50 shadow-[0_8px_40px_rgba(0,0,0,0.04)] overflow-hidden h-full min-h-0 relative transition-all duration-300`}>
+          <div className="p-4 sm:p-5 border-b border-white/30 bg-white/20 flex flex-col gap-3 sm:gap-4">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 sm:gap-3">
+                <button
+                  type="button"
+                  onClick={() => setMobileHistoryOpen(true)}
+                  className="lg:hidden p-2 bg-white/70 hover:bg-white text-gray-700 rounded-xl border border-white/60 shadow-xs flex items-center justify-center transition-all cursor-pointer"
+                  title="Suhbatlar tarixi"
+                >
+                  <History className="w-4 h-4 text-blue-600" />
+                </button>
                 <div className="p-2 bg-blue-500 text-white rounded-xl shadow-sm">
-                  <Bot className="w-5 h-5" />
+                  <Bot className="w-4 h-4 sm:w-5 sm:h-5" />
                 </div>
-                <h2 className="font-bold text-gray-900 tracking-tight text-sm sm:text-base">{lt.ai_assistant_title}</h2>
+                <h2 className="font-bold text-gray-900 tracking-tight text-xs sm:text-base truncate max-w-[130px] sm:max-w-none">{lt.ai_assistant_title}</h2>
               </div>
               
               <div className="flex items-center gap-2">
