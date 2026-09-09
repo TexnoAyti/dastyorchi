@@ -1,0 +1,237 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Extended user profile data.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "subscriptionTier": { "type": "string", "enum": ["free", "pro", "business"] },
+        "subscriptionStatus": { "type": "string", "enum": ["active", "expired", "canceled"] },
+        "requestsToday": { "type": "integer" },
+        "exportsToday": { "type": "integer" },
+        "lastRequestResetDate": { "type": "string" },
+        "lastExportResetDate": { "type": "string" },
+        "createdAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["uid", "email", "role", "subscriptionTier", "createdAt"]
+    },
+    "PersonProfile": {
+      "title": "PersonProfile",
+      "description": "A profile of a person (client/party) stored by the user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "fullName": { "type": "string" },
+        "address": { "type": "string" },
+        "passport": { "type": "string" },
+        "phone": { "type": "string" },
+        "createdAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["userId", "fullName", "createdAt"]
+    },
+    "Case": {
+      "title": "Case",
+      "description": "A legal case managed by the user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "closed"] },
+        "createdAt": { "type": "string", "format": "timestamp" },
+        "updatedAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["userId", "title", "status", "createdAt", "updatedAt"]
+    },
+    "Document": {
+      "title": "Document",
+      "description": "A generated legal document.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "caseId": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "language": { "type": "string" },
+        "createdAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["userId", "content", "language", "createdAt"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "A chat session with the AI legal assistant.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "messages": { "type": "array" },
+        "language": { "type": "string" },
+        "createdAt": { "type": "string", "format": "timestamp" },
+        "updatedAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["userId", "title", "messages", "language", "createdAt", "updatedAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "An in-app or browser notification for AI completions.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "type": { "type": "string", "enum": ["chat", "document", "analysis"] },
+        "timestamp": { "type": "string" },
+        "read": { "type": "boolean" },
+        "chatId": { "type": "string" },
+        "documentId": { "type": "string" },
+        "analysisId": { "type": "string" }
+      },
+      "required": ["userId", "id", "title", "body", "type", "timestamp", "read"]
+    },
+    "LegalArticle": {
+      "title": "LegalArticle",
+      "description": "A real legal article from the constitution, civil, or penal code.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "codeId": { "type": "string" },
+        "codeName": { "type": "string" },
+        "articleNumber": { "type": "string" },
+        "articleTitle": { "type": "string" },
+        "content": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["id", "codeId", "codeName", "articleNumber", "articleTitle", "content", "createdAt"]
+    },
+    "Activity": {
+      "title": "Activity",
+      "description": "An audit log of user or system action/activity.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "type": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "caseId": { "type": "string" },
+        "caseTitle": { "type": "string" },
+        "timestamp": { "type": "integer" }
+      },
+      "required": ["userId", "type", "title", "timestamp"]
+    },
+    "Conversion": {
+      "title": "Conversion",
+      "description": "A translation or script conversion log.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["translation", "script_conversion"] },
+        "mode": { "type": "string", "enum": ["standard", "legal", "academic"] },
+        "sourceLanguage": { "type": "string" },
+        "targetLanguage": { "type": "string" },
+        "sourceText": { "type": "string" },
+        "targetText": { "type": "string" },
+        "createdAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["userId", "type", "sourceLanguage", "targetLanguage", "sourceText", "targetText", "createdAt"]
+    },
+    "EvidenceReport": {
+      "title": "EvidenceReport",
+      "description": "An AI-powered legal evidence analysis report.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "caseId": { "type": "string" },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" },
+        "files": { "type": "array" },
+        "analysis": { "type": "object" },
+        "winProbability": { "type": "object" },
+        "riskMatrix": { "type": "array" },
+        "opponentAnalysis": { "type": "object" },
+        "actionPlan": { "type": "object" },
+        "scorecard": { "type": "object" }
+      },
+      "required": ["userId", "caseId", "analysis", "winProbability", "riskMatrix", "opponentAnalysis", "actionPlan", "scorecard", "createdAt", "updatedAt"]
+    },
+    "ResearchReport": {
+      "title": "ResearchReport",
+      "description": "An AI-powered legal research report containing issue summaries, legal questions, and case strategy details.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "id": { "type": "string" },
+        "question": { "type": "string" },
+        "category": { "type": "string" },
+        "caseId": { "type": "string" },
+        "summary": { "type": "string" },
+        "legalQuestions": { "type": "array", "items": { "type": "string" } },
+        "principles": { "type": "array", "items": { "type": "string" } },
+        "supportingArguments": { "type": "array", "items": { "type": "string" } },
+        "opposingArguments": { "type": "array", "items": { "type": "string" } },
+        "risks": { "type": "array", "items": { "type": "string" } },
+        "requiredDocuments": { "type": "array", "items": { "type": "string" } },
+        "missingEvidence": { "type": "array", "items": { "type": "string" } },
+        "supportingMaterials": { "type": "array", "items": { "type": "string" } },
+        "riskLevel": { "type": "string" },
+        "riskAnalysis": { "type": "string" },
+        "strategyActions": { "type": "array", "items": { "type": "string" } },
+        "expertiseTip": { "type": "string" },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" }
+      },
+      "required": ["userId", "question", "category", "summary", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/research_reports/{reportId}": {
+      "schema": { "$ref": "#/entities/ResearchReport" },
+      "description": "Stores user-specific legal research reports."
+    },
+    "/cases/{caseId}/evidenceReports/{reportId}": {
+      "schema": { "$ref": "#/entities/EvidenceReport" },
+      "description": "Stores case-specific AI evidence analyzer reports."
+    },
+    "/conversions/{conversionId}": {
+      "schema": { "$ref": "#/entities/Conversion" },
+      "description": "Stores user document translation and script conversion histories."
+    },
+    "/activities/{activityId}": {
+      "schema": { "$ref": "#/entities/Activity" },
+      "description": "Stores user activities and audit logs."
+    },
+    "/legal_articles/{articleId}": {
+      "schema": { "$ref": "#/entities/LegalArticle" },
+      "description": "Stores individual legal source documents."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Stores user account data."
+    },
+    "/users/{userId}/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/Notification" },
+      "description": "Stores user-specific AI notification alerts inside their user-scoped subcollection."
+    },
+    "/profiles/{profileId}": {
+      "schema": { "$ref": "#/entities/PersonProfile" },
+      "description": "Stores multiple person profiles for a user."
+    },
+    "/cases/{caseId}": {
+      "schema": { "$ref": "#/entities/Case" },
+      "description": "Stores legal cases."
+    },
+    "/documents/{documentId}": {
+      "schema": { "$ref": "#/entities/Document" },
+      "description": "Stores generated legal documents."
+    },
+    "/chats/{chatId}": {
+      "schema": { "$ref": "#/entities/Chat" },
+      "description": "Stores chat sessions."
+    }
+  }
+}

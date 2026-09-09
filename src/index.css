@@ -1,0 +1,150 @@
+@import "tailwindcss";
+
+@variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8fafc;
+  --bg-card: #ffffff;
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --border-primary: #e2e8f0;
+  --accent-primary: #2563eb;
+}
+
+.dark {
+  --bg-primary: #0f1115;
+  --bg-secondary: #1a1d24;
+  --bg-card: #15181f;
+  --text-primary: #f1f5f9;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+  --border-primary: #2d3139;
+  --accent-primary: #3b82f6;
+}
+
+
+/* Base default colors configuration using design tokens */
+html {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+
+/* 1. Backdrop Filter & Transparency Fallbacks */
+.glass-nav-fallback {
+  background-color: #ffffff !important; /* Solid fallback */
+}
+@supports (backdrop-filter: blur(10px)) or (-webkit-backdrop-filter: blur(10px)) {
+  .glass-nav-fallback {
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    background-color: rgba(255, 255, 255, 0.8) !important;
+  }
+}
+
+.modal-overlay-fallback {
+  background-color: #1f2937 !important; /* Solid fallback (gray-800) */
+}
+@supports (backdrop-filter: blur(4px)) or (-webkit-backdrop-filter: blur(4px)) {
+  .modal-overlay-fallback {
+    backdrop-filter: blur(4px) !important;
+    -webkit-backdrop-filter: blur(4px) !important;
+    background-color: rgba(0, 0, 0, 0.5) !important;
+  }
+}
+
+/* 2. Gradient Fallbacks */
+.hero-gradient-fallback {
+  background-color: #eff6ff !important; /* Solid fallback (blue-50) */
+  background-image: none !important;
+}
+@supports (background-image: linear-gradient(to bottom right, #eff6ff, #ffffff)) {
+  .hero-gradient-fallback {
+    background-image: linear-gradient(to bottom right, #eff6ff, #ffffff) !important;
+  }
+}
+
+/* 3. Shadow Fallbacks */
+.shadow-sm-fallback {
+  border: 1px solid #e5e7eb !important; /* Fallback border */
+  box-shadow: none !important;
+}
+@supports (box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05)) {
+  .shadow-sm-fallback {
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05) !important;
+    border-color: transparent !important;
+  }
+}
+
+.shadow-lg-fallback {
+  border: 1px solid #e5e7eb !important; /* Fallback border */
+  box-shadow: none !important;
+}
+@supports (box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1)) {
+  .shadow-lg-fallback {
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05) !important;
+    border-color: transparent !important;
+  }
+}
+
+.shadow-xl-fallback {
+  border: 1px solid #e5e7eb !important; /* Fallback border */
+  box-shadow: none !important;
+}
+@supports (box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1)) {
+  .shadow-xl-fallback {
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04) !important;
+    border-color: transparent !important;
+  }
+}
+
+.shadow-2xl-fallback {
+  border: 1px solid #e5e7eb !important; /* Fallback border */
+  box-shadow: none !important;
+}
+@supports (box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25)) {
+  .shadow-2xl-fallback {
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25) !important;
+    border-color: transparent !important;
+  }
+}
+
+@keyframes blob {
+  0% { transform: translate(0px, 0px) scale(1); }
+  33% { transform: translate(30px, -50px) scale(1.1); }
+  66% { transform: translate(-20px, 20px) scale(0.9); }
+  100% { transform: translate(0px, 0px) scale(1); }
+}
+
+.animate-blob {
+  animation: blob 7s alternate infinite;
+}
+
+.animation-delay-2000 {
+  animation-delay: 2s;
+}
+
+.animation-delay-4000 {
+  animation-delay: 4s;
+}
+
+/* Custom minimal scrollbar for glass UI */
+.glass-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.glass-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.glass-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+}
+.glass-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+
+

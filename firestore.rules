@@ -1,0 +1,212 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Primitive Definitions
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(uid) { return isSignedIn() && request.auth.uid == uid; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function existing() { return resource.data; }
+    function incoming() { return request.resource.data; }
+    
+    // Role Checks
+    function isAdmin() { 
+      return isSignedIn() && (
+        request.auth.token.email == 'umidjonpremium6@gmail.com' ||
+        request.auth.token.email == 'arslonovazamat11@gmail.com' ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'admin')
+      );
+    }
+
+    // Default Reject All
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 1. Users Profile
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId)
+                    && incoming().keys().hasAll(['email'])
+                    && incoming().keys().size() <= 20;
+      allow update: if isOwner(userId) 
+                    && (!incoming().keys().hasAny(['role']) || incoming().get('role', '') == existing().get('role', ''))
+                    || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // 2. Chat Sessions
+    match /chats/{chatId} {
+      allow read: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+      
+      allow create: if isSignedIn() 
+                    && incoming().get('userId', '') == request.auth.uid
+                    && incoming().get('isPrivate', false) == false;
+                    
+      allow update: if isSignedIn() 
+                    && existing().get('userId', '') == request.auth.uid
+                    && incoming().get('userId', '') == existing().get('userId', '');
+                    
+      allow delete: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+      
+      // NEW: Message Subcollection Scalability Support
+      match /messages/{messageId} {
+        allow read, write: if isSignedIn() 
+                           && exists(/databases/$(database)/documents/chats/$(chatId))
+                           && get(/databases/$(database)/documents/chats/$(chatId)).data.get('userId', '') == request.auth.uid;
+      }
+    }
+
+    // 3. Legal Cases
+    match /cases/{caseId} {
+      allow read: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+      
+      allow create: if isSignedIn() 
+                    && incoming().get('userId', '') == request.auth.uid;
+                    
+      allow update: if isSignedIn() 
+                    && existing().get('userId', '') == request.auth.uid
+                    && incoming().get('userId', '') == existing().get('userId', '');
+                    
+      allow delete: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+
+      match /messages/{messageId} {
+        allow read, write: if isSignedIn() 
+                           && exists(/databases/$(database)/documents/cases/$(caseId))
+                           && get(/databases/$(database)/documents/cases/$(caseId)).data.get('userId', '') == request.auth.uid;
+      }
+    }
+    // 4. Case Evidences (Subcollection restriction)
+    match /cases/{caseId}/evidence/{evidenceId} {
+      // Inherit rules from parent case
+      allow read, write: if isSignedIn() 
+                         && exists(/databases/$(database)/documents/cases/$(caseId))
+                         && get(/databases/$(database)/documents/cases/$(caseId)).data.get('userId', '') == request.auth.uid;
+    }
+
+    // 4a. Case Evidence Reports (Subcollection restriction)
+    match /cases/{caseId}/evidenceReports/{reportId} {
+      // Inherit rules from parent case
+      allow read, write: if isSignedIn() 
+                         && exists(/databases/$(database)/documents/cases/$(caseId))
+                         && get(/databases/$(database)/documents/cases/$(caseId)).data.get('userId', '') == request.auth.uid;
+    }
+
+    // 4b. Case Analysis Metrics (Subcollection restriction)
+    match /cases/{caseId}/analysisMetrics/{metricId} {
+      // Inherit rules from parent case
+      allow read, write: if isSignedIn() 
+                         && exists(/databases/$(database)/documents/cases/$(caseId))
+                         && get(/databases/$(database)/documents/cases/$(caseId)).data.get('userId', '') == request.auth.uid;
+    }
+
+    // 5. Profiles
+    match /profiles/{profileId} {
+      allow read: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+      allow create: if isSignedIn() && incoming().get('userId', '') == request.auth.uid;
+      allow update: if isSignedIn() && existing().get('userId', '') == request.auth.uid && incoming().get('userId', '') == existing().get('userId', '');
+      allow delete: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+    }
+
+    // 6. Documents
+    match /documents/{docId} {
+      allow read: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+      allow create: if isSignedIn() && incoming().get('userId', '') == request.auth.uid;
+      allow update: if isSignedIn() && existing().get('userId', '') == request.auth.uid && incoming().get('userId', '') == existing().get('userId', '');
+      allow delete: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+    }
+
+    // 6a. Archived Documents
+    match /archived_documents/{docId} {
+      allow read: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+      allow create: if isSignedIn() && incoming().get('userId', '') == request.auth.uid;
+      allow update: if isSignedIn() && existing().get('userId', '') == request.auth.uid && incoming().get('userId', '') == existing().get('userId', '');
+      allow delete: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+    }
+
+    // 6b. Archived Chats
+    match /archived_chats/{chatId} {
+      allow read: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+      allow create: if isSignedIn() && incoming().get('userId', '') == request.auth.uid;
+      allow update: if isSignedIn() && existing().get('userId', '') == request.auth.uid && incoming().get('userId', '') == existing().get('userId', '');
+      allow delete: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+
+      match /messages/{messageId} {
+        allow read, write: if isSignedIn() 
+                           && exists(/databases/$(database)/documents/archived_chats/$(chatId))
+                           && get(/databases/$(database)/documents/archived_chats/$(chatId)).data.get('userId', '') == request.auth.uid;
+      }
+    }
+
+    // 6c. Archived Messages (Global Collection)
+    match /archived_messages/{messageId} {
+      allow read: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+      allow create: if isSignedIn() && incoming().get('userId', '') == request.auth.uid;
+      allow update: if isSignedIn() && existing().get('userId', '') == request.auth.uid && incoming().get('userId', '') == existing().get('userId', '');
+      allow delete: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+    }
+
+    // 7. Internal Settings
+    match /internal/{docId} {
+      allow read: if true; // Public configuration or restricted via component
+      allow write: if isAdmin();
+    }
+    
+    // 8. User-Scoped Notifications Alerts
+    match /users/{userId}/notifications/{notificationId} {
+      allow read, delete: if isSignedIn() && request.auth.uid == userId;
+      allow create, update: if isSignedIn() && request.auth.uid == userId && incoming().get('userId', '') == request.auth.uid;
+    }
+
+    // 9. Announcements
+    match /announcements/{annId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // 10. Payment Requests
+    match /paymentRequests/{requestId} {
+      allow read: if isSignedIn() && (existing().get('uid', '') == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && incoming().get('uid', '') == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // 11. Legal Articles Source Database
+    match /legal_articles/{articleId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // 12. Activities Log
+    match /activities/{activityId} {
+      allow read: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+      allow create: if isSignedIn() && incoming().get('userId', '') == request.auth.uid;
+      allow delete: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+    }
+
+    // 13. Language and Script Conversions History
+    match /conversions/{conversionId} {
+      allow read: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+      allow create: if isSignedIn() && incoming().get('userId', '') == request.auth.uid;
+      allow update: if isSignedIn() && existing().get('userId', '') == request.auth.uid && incoming().get('userId', '') == existing().get('userId', '');
+      allow delete: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+    }
+
+    // 14. Legal Research Reports
+    match /research_reports/{reportId} {
+      allow read: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+      allow create: if isSignedIn() && incoming().get('userId', '') == request.auth.uid;
+      allow update: if isSignedIn() && existing().get('userId', '') == request.auth.uid && incoming().get('userId', '') == existing().get('userId', '');
+      allow delete: if isSignedIn() && existing().get('userId', '') == request.auth.uid;
+    }
+
+    // 15. System Audit & Error Logs
+    match /system_logs/{logId} {
+      allow read: if isAdmin();
+      allow create: if true;
+      allow update, delete: if isAdmin();
+    }
+
+  }
+}

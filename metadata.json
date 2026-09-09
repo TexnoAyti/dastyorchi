@@ -1,0 +1,10 @@
+{
+  "name": "Upgrade Dastyorchi.uz",
+  "description": "Automatic legal document generation for Uzbekistan. Generate civil court applications in Uzbek and Russian using AI.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
