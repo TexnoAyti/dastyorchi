@@ -17,29 +17,33 @@ const AVATAR_PRESETS = [
   { id: "zoe", name: "Zoe", url: "https://api.dicebear.com/7.x/adventurer/svg?seed=Zoe" },
 ];
 
-export function UserProfile() {
+export function UserProfile({ user }: { user?: any }) {
   const { t, language, setLanguage } = useLanguage();
-  const [currentUserData, setCurrentUserData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const [currentUserData, setCurrentUserData] = useState<any>(user || null);
+  const [loading, setLoading] = useState(!user);
   const [saving, setSaving] = useState(false);
-  const [displayName, setDisplayName] = useState("");
-  const [avatarUrl, setAvatarUrl] = useState("");
-  const [subscriptionTier, setSubscriptionTier] = useState<"free" | "pro" | "business">("free");
-  const [requestsToday, setRequestsToday] = useState(0);
-  const [exportsToday, setExportsToday] = useState(0);
+  const [displayName, setDisplayName] = useState(user?.displayName || "");
+  const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl || user?.photoUrl || "");
+  const [subscriptionTier, setSubscriptionTier] = useState<"free" | "pro" | "business">(user?.subscriptionTier || "free");
+  const [requestsToday, setRequestsToday] = useState(user?.requestsToday || 0);
+  const [exportsToday, setExportsToday] = useState(user?.exportsToday || 0);
   const [message, setMessage] = useState({ type: "", text: "" });
   const [customGeminiKey, setCustomGeminiKey] = useState(localStorage.getItem("custom_gemini_api_key") || "");
   const [showKeyField, setShowKeyField] = useState(false);
 
   useEffect(() => {
-    if (!auth.currentUser) return;
-    const userDocRef = doc(db, "users", auth.currentUser.uid);
+    const targetUid = user?.uid || auth.currentUser?.uid;
+    if (!targetUid) {
+      setLoading(false);
+      return;
+    }
+    const userDocRef = doc(db, "users", targetUid);
     const unsubscribe = onSnapshot(userDocRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
-        setCurrentUserData(data);
+        setCurrentUserData({ ...data, uid: targetUid });
         setDisplayName(data.displayName || "");
-        setAvatarUrl(data.avatarUrl || "");
+        setAvatarUrl(data.avatarUrl || data.photoUrl || "");
         setSubscriptionTier(data.subscriptionTier || "free");
         setRequestsToday(data.requestsToday || 0);
         setExportsToday(data.exportsToday || 0);
@@ -51,17 +55,18 @@ export function UserProfile() {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [user]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!auth.currentUser) return;
+    const targetUid = user?.uid || currentUserData?.uid || auth.currentUser?.uid;
+    if (!targetUid) return;
 
     setSaving(true);
     setMessage({ type: "", text: "" });
 
     try {
-      const userDocRef = doc(db, "users", auth.currentUser.uid);
+      const userDocRef = doc(db, "users", targetUid);
       await updateDoc(userDocRef, {
         displayName: displayName.trim(),
         avatarUrl,
@@ -148,7 +153,9 @@ export function UserProfile() {
               <p className="font-bold text-gray-900 dark:text-zinc-50 text-lg leading-snug">
                 {displayName || (language === 'uz_lat' ? 'Foydalanuvchi' : language === 'uz_cyr' ? 'Фойдаланувчи' : language === 'ru' ? 'Пользователь' : 'User')}
               </p>
-              <p className="text-sm text-gray-500 dark:text-zinc-400 mt-0.5">{auth.currentUser?.email}</p>
+              <div className="flex items-center justify-center gap-1.5 mt-1 text-xs text-blue-600 dark:text-blue-400 font-medium">
+                <span>{currentUserData?.username ? `@${currentUserData.username}` : (currentUserData?.telegramId ? `Telegram ID: ${currentUserData.telegramId}` : (currentUserData?.email || "Telegram orqali tasdiqlangan"))}</span>
+              </div>
             </div>
 
             <div className="mt-4 flex flex-col items-center gap-1">

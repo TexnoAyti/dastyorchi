@@ -7,6 +7,8 @@ import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import admin from "firebase-admin";
 import { getFirestore } from "firebase-admin/firestore";
+import { initializeApp as initClientFirebase } from "firebase/app";
+import { initializeFirestore, doc as fsDoc, getDoc as fsGetDoc, setDoc as fsSetDoc, updateDoc as fsUpdateDoc } from "firebase/firestore";
 import fs from "fs";
 import crypto from "crypto";
 
@@ -14,52 +16,146 @@ dotenv.config();
 
 // Initialize Firebase Admin securely
 let dbAdmin: any = null;
+let dbClient: any = null;
+
 try {
   const configPath = path.join(process.cwd(), "firebase-applet-config.json");
   if (fs.existsSync(configPath)) {
     const firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-    const app = admin.initializeApp({
-      projectId: firebaseConfig.projectId,
-    });
-    dbAdmin = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-    console.log("Firebase Admin successfully initialized on the backend. Database: " + firebaseConfig.firestoreDatabaseId);
+    try {
+      const app = admin.initializeApp({
+        projectId: firebaseConfig.projectId,
+      });
+      dbAdmin = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+      console.log("Firebase Admin successfully initialized on the backend. Database: " + firebaseConfig.firestoreDatabaseId);
+    } catch (adminErr: any) {
+      console.warn("Firebase Admin initialize warning:", adminErr.message);
+    }
+
+    try {
+      const clientApp = initClientFirebase(firebaseConfig, "server-client-app");
+      dbClient = initializeFirestore(clientApp, {}, firebaseConfig.firestoreDatabaseId);
+      console.log("Firebase Client SDK initialized on backend for Firestore operations.");
+    } catch (clientErr: any) {
+      console.warn("Firebase Client SDK backend initialize warning:", clientErr.message);
+    }
   } else {
     console.warn("firebase-applet-config.json was not found. Server features might run in sandbox modes.");
   }
 } catch (err: any) {
-  console.error("Firebase Admin initialization error:", err.message);
+  console.error("Firebase initialization error:", err.message);
+}
+
+// Telegram WebApp initData HMAC-SHA256 verification
+function verifyTelegramWebAppData(initData: string, botToken: string): { valid: boolean; user?: any; authDate?: number; error?: string } {
+  try {
+    if (!initData || typeof initData !== "string") {
+      return { valid: false, error: "Bo'sh yoki noto'g'ri initData" };
+    }
+    const params = new URLSearchParams(initData);
+    const hash = params.get("hash");
+    if (!hash) {
+      return { valid: false, error: "initData ichida hash topilmadi" };
+    }
+
+    params.delete("hash");
+
+    // Sort parameters alphabetically
+    const keys = Array.from(params.keys()).sort();
+    const checkString = keys.map(key => `${key}=${params.get(key)}`).join("\n");
+
+    // Compute secret key: HMAC-SHA256("WebAppData", botToken)
+    const secretKey = crypto.createHmac("sha256", "WebAppData").update(botToken).digest();
+
+    // Compute hash: HMAC-SHA256(secretKey, checkString)
+    const calculatedHash = crypto.createHmac("sha256", secretKey).update(checkString).digest("hex");
+
+    // Timing-safe comparison
+    const hashBuf = Buffer.from(hash, "hex");
+    const calcBuf = Buffer.from(calculatedHash, "hex");
+    if (hashBuf.length !== calcBuf.length || !crypto.timingSafeEqual(hashBuf, calcBuf)) {
+      return { valid: false, error: "Telegram imzosi (hash) mos kelmadi" };
+    }
+
+    const authDateStr = params.get("auth_date");
+    const authDate = authDateStr ? parseInt(authDateStr, 10) : 0;
+    const now = Math.floor(Date.now() / 1000);
+    // Allow up to 48 hours for auth_date
+    if (!authDate || (now - authDate) > 86400 * 2) {
+      return { valid: false, error: "Telegram sessiyasi eskirgan (auth_date expired)" };
+    }
+
+    const userRaw = params.get("user");
+    if (!userRaw) {
+      return { valid: false, error: "Foydalanuvchi ma'lumoti topilmadi" };
+    }
+
+    const user = JSON.parse(userRaw);
+    if (!user || !user.id) {
+      return { valid: false, error: "Foydalanuvchi IDsi mavjud emas" };
+    }
+
+    return { valid: true, user, authDate };
+  } catch (err: any) {
+    return { valid: false, error: err.message || "Tasdiqlashda xatolik yuz berdi" };
+  }
+}
+
+const SESSION_SECRET = process.env.SESSION_SECRET || process.env.TELEGRAM_BOT_TOKEN || "dastyorchi_telegram_session_secret_uz";
+
+function createSessionToken(payload: any): string {
+  const data = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = crypto.createHmac("sha256", SESSION_SECRET).update(data).digest("base64url");
+  return `${data}.${signature}`;
+}
+
+function verifySessionToken(token: string): { valid: boolean; payload?: any; error?: string } {
+  try {
+    if (!token || !token.includes(".")) {
+      return { valid: false, error: "Yaroqsiz token formati" };
+    }
+    const [data, signature] = token.split(".");
+    const expectedSignature = crypto.createHmac("sha256", SESSION_SECRET).update(data).digest("base64url");
+    if (signature !== expectedSignature) {
+      return { valid: false, error: "Token imzosi noto'g'ri" };
+    }
+    const payload = JSON.parse(Buffer.from(data, "base64url").toString("utf-8"));
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+      return { valid: false, error: "Sessiya vaqti tugagan" };
+    }
+    return { valid: true, payload };
+  } catch (err: any) {
+    return { valid: false, error: err.message || "Tokenni tekshirishda xatolik" };
+  }
 }
 
 async function upgradeUserSubscription(userId: string, tier: "pro" | "business", provider: string, amount: number) {
-  if (!dbAdmin) {
-    console.error("Firebase Admin database not online, unable to complete backend upgrade request.");
-    throw new Error("Admin connection offline");
+  try {
+    if (dbClient) {
+      const userRef = fsDoc(dbClient, "users", userId);
+      await fsUpdateDoc(userRef, {
+        subscriptionTier: tier,
+        subscriptionStatus: "active",
+        requestsToday: 0
+      });
+      console.log(`Successfully upgraded user: ${userId} to ${tier} subscription tier via ${provider} (dbClient)`);
+      return;
+    }
+  } catch (err: any) {
+    console.warn("dbClient upgrade error, falling back to dbAdmin:", err.message);
   }
 
-  const userRef = dbAdmin.collection("users").doc(userId);
-  await userRef.update({
-    subscriptionTier: tier,
-    subscriptionStatus: "active",
-    requestsToday: 0 // Automatically reset request limits upon payment approval
-  });
-
-  // Create an approved paymentRequest document for SaaS system logging
-  await dbAdmin.collection("paymentRequests").add({
-    uid: userId,
-    email: "automated-webhook@system.uz",
-    displayName: "Automated Gateway",
-    tier,
-    amount,
-    formattedAmount: `${amount.toLocaleString()} UZS`,
-    provider,
-    status: "approved",
-    approvedAt: admin.firestore.FieldValue.serverTimestamp(),
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    receiptNote: `Avtomatik to'lov ${provider.toUpperCase()} tizimi orqali tasdiqlandi.`
-  });
-
-  console.log(`Successfully upgraded user: ${userId} to ${tier} subscription tier via ${provider}`);
+  if (dbAdmin) {
+    const userRef = dbAdmin.collection("users").doc(userId);
+    await userRef.update({
+      subscriptionTier: tier,
+      subscriptionStatus: "active",
+      requestsToday: 0
+    });
+    console.log(`Successfully upgraded user: ${userId} to ${tier} subscription tier via ${provider} (dbAdmin)`);
+  }
 }
+
 
 async function startServer() {
   const app = express();
@@ -72,6 +168,283 @@ async function startServer() {
   // API routes FIRST
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
+  });
+
+  // TELEGRAM WEBAPP AUTHENTICATION ENDPOINT
+  app.post("/api/auth/telegram", async (req, res) => {
+    try {
+      const { initData, devBypass } = req.body || {};
+      const botToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
+
+      let telegramUser: any = null;
+
+      // When botToken is configured, strictly verify initData HMAC signature
+      if (botToken) {
+        if (!initData) {
+          return res.status(400).json({ error: "Telegram initData parametri taqdim etilmagan" });
+        }
+        const verification = verifyTelegramWebAppData(initData, botToken);
+        if (!verification.valid) {
+          return res.status(401).json({ error: verification.error || "Telegram ma'lumotlari tasdiqlanmadi" });
+        }
+        telegramUser = verification.user;
+      } else {
+        // When TELEGRAM_BOT_TOKEN is not yet set in environment:
+        // Strictly reject in production. Allow dev fallback only in development mode.
+        if (process.env.NODE_ENV === "production") {
+          return res.status(500).json({ 
+            error: "Serverda TELEGRAM_BOT_TOKEN sozlanmagan. Iltimos bot tokenini muhit sozlamalariga kiriting." 
+          });
+        }
+
+        console.warn("[Auth Warning] TELEGRAM_BOT_TOKEN sozlanmagan. Rivojlantirish (dev) rejimida sinov rejimida ishlamoqda.");
+
+        if (initData) {
+          try {
+            const params = new URLSearchParams(initData);
+            const userRaw = params.get("user");
+            if (userRaw) {
+              telegramUser = JSON.parse(userRaw);
+            }
+          } catch (e) {
+            console.warn("Failed to parse user from initData in dev fallback");
+          }
+        }
+
+        if (!telegramUser && devBypass) {
+          telegramUser = {
+            id: 999999999,
+            first_name: "Dasturchi",
+            last_name: "Sinovchi",
+            username: "dastyorchi_dev",
+            language_code: "uz"
+          };
+        }
+
+        if (!telegramUser) {
+          return res.status(400).json({ error: "Telegram initData yoki foydalanuvchi ma'lumoti topilmadi" });
+        }
+      }
+
+      const telegramId = Number(telegramUser.id);
+      const internalUserId = `tg_${telegramId}`;
+
+      // Check admin privileges via trusted environment variable or database
+      const adminIds = (process.env.ADMIN_TELEGRAM_IDS || "")
+        .split(",")
+        .map(s => s.trim())
+        .filter(Boolean);
+      const isEnvAdmin = adminIds.includes(String(telegramId));
+
+      let userProfile: any = null;
+
+      // Try reading user from Firestore
+      if (dbClient) {
+        try {
+          const userRef = fsDoc(dbClient, "users", internalUserId);
+          const snap = await fsGetDoc(userRef);
+          if (snap.exists()) {
+            userProfile = snap.data();
+          }
+        } catch (e: any) {
+          console.warn("Error reading user profile via dbClient:", e.message);
+        }
+      }
+
+      if (!userProfile) {
+        // New user creation
+        const role = isEnvAdmin ? "admin" : "user";
+        const displayName = [telegramUser.first_name, telegramUser.last_name].filter(Boolean).join(" ") ||
+                            telegramUser.username ||
+                            `Foydalanuvchi #${telegramId}`;
+        const avatarUrl = telegramUser.photo_url || `https://api.dicebear.com/7.x/adventurer/svg?seed=${internalUserId}`;
+
+        userProfile = {
+          uid: internalUserId,
+          id: internalUserId,
+          telegramId,
+          firstName: telegramUser.first_name || "",
+          lastName: telegramUser.last_name || "",
+          username: telegramUser.username || "",
+          displayName,
+          photoUrl: avatarUrl,
+          avatarUrl,
+          languageCode: telegramUser.language_code || "uz",
+          role,
+          subscriptionTier: "free",
+          subscriptionStatus: "active",
+          requestsToday: 0,
+          exportsToday: 0,
+          lastRequestResetDate: new Date().toLocaleDateString("en-CA"),
+          lastExportResetDate: new Date().toLocaleDateString("en-CA"),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+
+        if (dbClient) {
+          try {
+            await fsSetDoc(fsDoc(dbClient, "users", internalUserId), userProfile);
+          } catch (e: any) {
+            console.warn("Could not save new user to Firestore:", e.message);
+          }
+        }
+      } else {
+        // Update basic telegram metadata
+        const updatedFields: any = {
+          firstName: telegramUser.first_name || userProfile.firstName || "",
+          lastName: telegramUser.last_name || userProfile.lastName || "",
+          username: telegramUser.username || userProfile.username || "",
+          updatedAt: new Date().toISOString()
+        };
+        if (telegramUser.photo_url) {
+          updatedFields.photoUrl = telegramUser.photo_url;
+          updatedFields.avatarUrl = telegramUser.photo_url;
+        }
+        if (isEnvAdmin && userProfile.role !== "admin") {
+          updatedFields.role = "admin";
+          userProfile.role = "admin";
+        }
+        userProfile = { ...userProfile, ...updatedFields };
+
+        if (dbClient) {
+          try {
+            await fsUpdateDoc(fsDoc(dbClient, "users", internalUserId), updatedFields);
+          } catch (e: any) {
+            console.warn("Could not update user in Firestore:", e.message);
+          }
+        }
+      }
+
+      // Generate session token (valid for 14 days)
+      const token = createSessionToken({
+        uid: internalUserId,
+        telegramId,
+        role: userProfile.role || "user",
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + (14 * 24 * 60 * 60)
+      });
+
+      return res.json({
+        success: true,
+        token,
+        user: userProfile
+      });
+    } catch (err: any) {
+      console.error("Telegram Auth Error:", err);
+      return res.status(500).json({ error: "Avtorizatsiyada server xatoligi yuz berdi: " + (err.message || "") });
+    }
+  });
+
+  // GET SESSION VERIFICATION (prevents repeated initData validation on every re-render)
+  app.get("/api/auth/session", async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res.status(401).json({ error: "Avtorizatsiya tokeni topilmadi" });
+      }
+      const token = authHeader.substring(7).trim();
+      const verified = verifySessionToken(token);
+      if (!verified.valid || !verified.payload) {
+        return res.status(401).json({ error: verified.error || "Yaroqsiz yoki muddati o'tgan sessiya" });
+      }
+
+      const { uid } = verified.payload;
+      let userProfile = null;
+      if (dbClient) {
+        try {
+          const snap = await fsGetDoc(fsDoc(dbClient, "users", uid));
+          if (snap.exists()) {
+            userProfile = snap.data();
+          }
+        } catch (e: any) {
+          console.warn("Error reading session user profile:", e.message);
+        }
+      }
+
+      if (!userProfile) {
+        userProfile = {
+          uid,
+          id: uid,
+          telegramId: verified.payload.telegramId,
+          role: verified.payload.role || "user"
+        };
+      }
+
+      return res.json({
+        valid: true,
+        user: userProfile
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: "Sessiyani tekshirishda xatolik yuz berdi" });
+    }
+  });
+
+  // DEV-ONLY AUTH BYPASS (STRICTLY DISABLED IN PRODUCTION)
+  app.post("/api/auth/dev-login", async (req, res) => {
+    if (process.env.NODE_ENV === "production") {
+      return res.status(403).json({ error: "Dev login is strictly forbidden in production" });
+    }
+
+    try {
+      const devTelegramId = 999999999;
+      const internalUserId = `tg_${devTelegramId}`;
+
+      let userProfile: any = null;
+      if (dbClient) {
+        try {
+          const snap = await fsGetDoc(fsDoc(dbClient, "users", internalUserId));
+          if (snap.exists()) {
+            userProfile = snap.data();
+          }
+        } catch (e) {}
+      }
+
+      if (!userProfile) {
+        userProfile = {
+          uid: internalUserId,
+          id: internalUserId,
+          telegramId: devTelegramId,
+          firstName: "Dasturchi",
+          lastName: "Sinovchi",
+          username: "dastyorchi_dev",
+          displayName: "Dasturchi Sinovchi",
+          photoUrl: `https://api.dicebear.com/7.x/adventurer/svg?seed=${internalUserId}`,
+          avatarUrl: `https://api.dicebear.com/7.x/adventurer/svg?seed=${internalUserId}`,
+          languageCode: "uz",
+          role: "admin", // dev account has admin rights for testing
+          subscriptionTier: "pro",
+          subscriptionStatus: "active",
+          requestsToday: 0,
+          exportsToday: 0,
+          lastRequestResetDate: new Date().toLocaleDateString("en-CA"),
+          lastExportResetDate: new Date().toLocaleDateString("en-CA"),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+
+        if (dbClient) {
+          try {
+            await fsSetDoc(fsDoc(dbClient, "users", internalUserId), userProfile);
+          } catch (e) {}
+        }
+      }
+
+      const token = createSessionToken({
+        uid: internalUserId,
+        telegramId: devTelegramId,
+        role: userProfile.role || "admin",
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + (14 * 24 * 60 * 60)
+      });
+
+      return res.json({
+        success: true,
+        token,
+        user: userProfile
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: "Dev login xatoligi: " + err.message });
+    }
   });
 
   app.post("/api/ai", async (req, res) => {

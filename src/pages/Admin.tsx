@@ -164,25 +164,26 @@ export function AdminPanel({ user }: { user?: any }) {
   useEffect(() => {
     const runVerification = async () => {
       if (user) {
-        const isUserAdmin = user.role === "admin" || user.email === "umidjonpremium6@gmail.com" || user.email === "arslonovazamat11@gmail.com";
-        setIsAdmin(isUserAdmin);
+        setIsAdmin(user.role === "admin");
         setLoading(false);
         return;
       }
-      if (!auth.currentUser) {
+      const token = localStorage.getItem("dastyorchi_session_token");
+      if (!token && !auth.currentUser) {
         setLoading(false);
         return;
       }
       try {
-        const ref = doc(db, "users", auth.currentUser.uid);
-        const snap = await getDoc(ref);
-        if (snap.exists() && snap.data().role === "admin") {
-          setIsAdmin(true);
-        } else if (auth.currentUser.email === "umidjonpremium6@gmail.com" || auth.currentUser.email === "arslonovazamat11@gmail.com") {
-          setIsAdmin(true);
+        const uid = user?.uid || auth.currentUser?.uid;
+        if (uid) {
+          const ref = doc(db, "users", uid);
+          const snap = await getDoc(ref);
+          if (snap.exists() && snap.data().role === "admin") {
+            setIsAdmin(true);
+          }
         }
       } catch (e) {
-        console.error("Auth check issue: ", e);
+        console.error("Admin role verification issue: ", e);
       } finally {
         setLoading(false);
       }

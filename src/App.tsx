@@ -1,6 +1,8 @@
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { Navbar } from "./components/Navbar";
+import { MobileBottomDock } from "./components/MobileBottomDock";
+import { TelegramBrowserFallback } from "./components/TelegramBrowserFallback";
 import { Dashboard } from "./pages/Dashboard";
 import { CalendarPage } from "./pages/CalendarPage";
 import { Builder } from "./pages/Builder";
@@ -20,20 +22,33 @@ import { LanguageCenter } from "./pages/LanguageCenter";
 import { Research } from "./pages/Research";
 import { EvidencePage } from "./pages/Evidence";
 import { TimelinePage } from "./pages/TimelinePage";
-import { auth, db } from "./firebase";
-import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc, setDoc, onSnapshot, serverTimestamp, updateDoc } from "firebase/firestore";
+import { db } from "./firebase";
+import { doc, onSnapshot } from "firebase/firestore";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { requestNotificationPermission, triggerStartupTestNotification } from "./services/notificationService";
 import { NotificationProvider } from "./contexts/NotificationContext";
 import { PaywallProvider } from "./contexts/PaywallContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { 
+  getTelegramWebApp, 
+  isTelegramWebAppEnvironment, 
+  authenticateWithTelegramInitData, 
+  verifyStoredSession, 
+  devLoginBypass, 
+  logoutUser 
+} from "./services/telegramAuthService";
 import { WifiOff } from "lucide-react";
 
-function AppContent({ user }: { user: any }) {
+interface AppContentProps {
+  user: any;
+  onLogout: () => void;
+  onDevLogin: () => Promise<void>;
+  devLoading: boolean;
+  authError: string;
+}
+
+function AppContent({ user, onLogout, onDevLogin, devLoading, authError }: AppContentProps) {
   const location = useLocation();
-  const isConsultation = location.pathname === "/" || location.pathname === "/consultation" || location.pathname === "/chat";
-  const [destinationRoute, setDestinationRoute] = useState<string>("");
   const [isOnline, setIsOnline] = useState(typeof window !== "undefined" ? window.navigator.onLine : true);
 
   useEffect(() => {
@@ -49,59 +64,8 @@ function AppContent({ user }: { user: any }) {
     };
   }, []);
 
-  useEffect(() => {
-    // When location changes, reset the destination route (or keep it as the current path)
-    setDestinationRoute("");
-  }, [location.pathname]);
-
-  useEffect(() => {
-    const handleGlobalClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      const closestLink = target.closest("a");
-      if (closestLink) {
-        const href = closestLink.getAttribute("href");
-        if (href) {
-          setDestinationRoute(href);
-        }
-      }
-    };
-    document.addEventListener("click", handleGlobalClick);
-    return () => document.removeEventListener("click", handleGlobalClick);
-  }, []);
-
-  const isLoginPage = location.pathname === "/login";
-  const isHideNavbar = !user || isLoginPage;
-
-  const routesElement = (
-    <Routes>
-      <Route path="/" element={<Consultation user={user} />} />
-      <Route path="/consultation" element={<Consultation user={user} />} />
-      <Route path="/chat" element={<Consultation user={user} />} />
-      <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
-      <Route path="/dashboard" element={user ? <Dashboard /> : <Navigate to="/login" replace />} />
-      <Route path="/cases" element={user ? <Cases /> : <Navigate to="/login" replace />} />
-      <Route path="/research" element={user ? <Research /> : <Navigate to="/login" replace />} />
-      <Route path="/evidence" element={user ? <EvidencePage /> : <Navigate to="/login" replace />} />
-      <Route path="/timeline" element={user ? <TimelinePage /> : <Navigate to="/login" replace />} />
-      <Route path="/documents" element={user ? <DocumentsPage /> : <Navigate to="/login" replace />} />
-      <Route path="/templates" element={user ? <TemplatesLibrary /> : <Navigate to="/login" replace />} />
-      <Route path="/search" element={user ? <SearchPage /> : <Navigate to="/login" replace />} />
-      <Route path="/activity" element={user ? <ActivityPage /> : <Navigate to="/login" replace />} />
-      <Route path="/calendar" element={user ? <CalendarPage /> : <Navigate to="/login" replace />} />
-      <Route path="/language" element={user ? <LanguageCenter /> : <Navigate to="/login" replace />} />
-      <Route path="/profiles" element={user ? <Profiles /> : <Navigate to="/login" replace />} />
-      <Route path="/knowledge" element={user ? <KnowledgeBase /> : <Navigate to="/login" replace />} />
-      <Route path="/profile" element={user ? <UserProfile /> : <Navigate to="/login" replace />} />
-      <Route path="/settings" element={user ? <UserProfile /> : <Navigate to="/login" replace />} />
-      <Route path="/builder/:templateId" element={user ? <Builder /> : <Navigate to="/login" replace />} />
-      <Route path="/result/:documentId" element={user ? <Result /> : <Navigate to="/login" replace />} />
-      <Route path="/admin" element={<AdminPanel user={user} />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
-  );
-
   const offlineBanner = !isOnline && (
-    <div className="fixed bottom-6 left-6 z-[999999] bg-amber-600 text-white px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-3 animate-bounce border border-amber-500 max-w-sm">
+    <div className="fixed bottom-20 sm:bottom-6 left-6 z-[999999] bg-amber-600 text-white px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-3 animate-bounce border border-amber-500 max-w-sm">
       <div className="w-8 h-8 rounded-full bg-amber-500/20 flex items-center justify-center shrink-0">
         <WifiOff className="w-5 h-5 text-white" />
       </div>
@@ -114,28 +78,70 @@ function AppContent({ user }: { user: any }) {
     </div>
   );
 
-  if (isHideNavbar) {
+  // If unauthenticated: render clean Telegram fallback page
+  if (!user) {
     return (
       <div className="min-h-[100dvh] h-[100dvh] w-full max-w-full flex flex-col bg-gray-50 dark:bg-zinc-950 overflow-hidden relative">
-        <main className="flex-1 min-h-0 min-w-0 h-full w-full overflow-hidden">
-          {routesElement}
-        </main>
+        <Routes>
+          <Route path="/login" element={<Login onLoginSuccess={(u) => window.location.reload()} />} />
+          <Route path="*" element={
+            <TelegramBrowserFallback 
+              onDevLogin={onDevLogin} 
+              devLoading={devLoading} 
+              errorMessage={authError} 
+            />
+          } />
+        </Routes>
         {offlineBanner}
       </div>
     );
   }
 
+  const routesElement = (
+    <Routes>
+      <Route path="/" element={<Consultation user={user} />} />
+      <Route path="/consultation" element={<Consultation user={user} />} />
+      <Route path="/chat" element={<Consultation user={user} />} />
+      <Route path="/login" element={<Navigate to="/" replace />} />
+      <Route path="/dashboard" element={<Dashboard />} />
+      <Route path="/cases" element={<Cases />} />
+      <Route path="/research" element={<Research />} />
+      <Route path="/evidence" element={<EvidencePage />} />
+      <Route path="/timeline" element={<TimelinePage />} />
+      <Route path="/documents" element={<DocumentsPage />} />
+      <Route path="/templates" element={<TemplatesLibrary />} />
+      <Route path="/search" element={<SearchPage />} />
+      <Route path="/activity" element={<ActivityPage />} />
+      <Route path="/calendar" element={<CalendarPage />} />
+      <Route path="/language" element={<LanguageCenter />} />
+      <Route path="/profiles" element={<Profiles />} />
+      <Route path="/knowledge" element={<KnowledgeBase />} />
+      <Route path="/profile" element={<UserProfile user={user} />} />
+      <Route path="/settings" element={<UserProfile user={user} />} />
+      <Route path="/builder/:templateId" element={<Builder />} />
+      <Route path="/result/:documentId" element={<Result />} />
+      <Route path="/admin" element={<AdminPanel user={user} />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+
   return (
-    <Navbar user={user}>
-      {routesElement}
-      {offlineBanner}
-    </Navbar>
+    <div className="min-h-[100dvh] h-[100dvh] w-full max-w-full flex flex-col bg-gray-50 dark:bg-zinc-950 overflow-hidden relative">
+      <Navbar user={user}>
+        {routesElement}
+        {offlineBanner}
+      </Navbar>
+      {/* Liquid Glass Mobile Bottom Dock */}
+      <MobileBottomDock user={user} onLogout={onLogout} />
+    </div>
   );
 }
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [devLoading, setDevLoading] = useState(false);
+  const [authError, setAuthError] = useState<string>("");
 
   useEffect(() => {
     // Request notification permission on app start and trigger test alert
@@ -151,87 +157,119 @@ export default function App() {
 
     let unsubscribeSnapshot: (() => void) | null = null;
 
-    const unsubscribeAuth = onAuthStateChanged(auth, async (authUser) => {
+    const startUserSync = (uid: string, initialUser: any) => {
       if (unsubscribeSnapshot) {
         unsubscribeSnapshot();
         unsubscribeSnapshot = null;
       }
 
-      if (authUser) {
-        const userRef = doc(db, "users", authUser.uid);
-        
-        try {
-          const userSnap = await getDoc(userRef);
-          if (!userSnap.exists()) {
-            const customDisplayName = authUser.displayName || authUser.email?.split("@")[0] || "Foydalanuvchi";
-            const isAdminEmail = authUser.email === "umidjonpremium6@gmail.com" || authUser.email === "arslonovazamat11@gmail.com";
-            const initialProfile = {
-              uid: authUser.uid,
-              email: authUser.email || "",
-              displayName: customDisplayName,
-              role: isAdminEmail ? "admin" : "user",
-              subscriptionTier: "free",
-              subscriptionStatus: "active",
-              requestsToday: 0,
-              exportsToday: 0,
-              lastRequestResetDate: new Date().toLocaleDateString("en-CA"),
-              lastExportResetDate: new Date().toLocaleDateString("en-CA"),
-              avatarUrl: authUser.photoURL || `https://api.dicebear.com/7.x/adventurer/svg?seed=${authUser.uid}`,
-              createdAt: serverTimestamp()
-            };
-            await setDoc(userRef, initialProfile);
-          }
-        } catch (err) {
-          console.error("Error ensuring user profile exists in Firestore:", err);
+      const userRef = doc(db, "users", uid);
+      unsubscribeSnapshot = onSnapshot(userRef, (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          setUser({
+            ...initialUser,
+            ...data,
+            uid,
+            id: uid
+          });
+        } else {
+          setUser(initialUser);
         }
-
-        // Establish real-time sync for the user document in Firestore
-        unsubscribeSnapshot = onSnapshot(userRef, async (snapshot) => {
-          if (snapshot.exists()) {
-            const data = snapshot.data();
-            const isAdminEmail = authUser.email === "umidjonpremium6@gmail.com" || authUser.email === "arslonovazamat11@gmail.com";
-            
-            // Automatically upgrade dev admin email to 'admin' role in storage
-            if (isAdminEmail && data.role !== "admin") {
-              try {
-                await updateDoc(userRef, { role: "admin" });
-              } catch (err) {
-                console.error("Auto role promotion failed: ", err);
-              }
-            }
-
-            setUser({
-              ...authUser,
-              ...data,
-              id: snapshot.id,
-              role: isAdminEmail ? "admin" : (data.role || "user")
-            });
-          } else {
-            setUser(authUser);
-          }
-          setLoading(false);
-        }, (error) => {
-          console.error("Error syncing user profile snapshot:", error);
-          setUser(authUser);
-          setLoading(false);
-        });
-
-      } else {
-        setUser(null);
         setLoading(false);
+      }, (err) => {
+        console.warn("User profile snapshot warning:", err);
+        setUser(initialUser);
+        setLoading(false);
+      });
+    };
+
+    const initAuth = async () => {
+      setLoading(true);
+      setAuthError("");
+
+      const tg = getTelegramWebApp();
+      if (tg) {
+        try {
+          tg.ready();
+          tg.expand();
+        } catch (e) {}
       }
-    });
+
+      // 1. If running inside Telegram WebApp with initData
+      if (isTelegramWebAppEnvironment() && tg?.initData) {
+        try {
+          const authResult = await authenticateWithTelegramInitData(tg.initData);
+          if (authResult?.user) {
+            startUserSync(authResult.user.uid, authResult.user);
+            return;
+          }
+        } catch (err: any) {
+          console.error("Telegram initData authentication error:", err);
+          setAuthError(err.message || "Telegram avtorizatsiyasida xatolik yuz berdi");
+        }
+      }
+
+      // 2. If existing session token exists in localStorage (e.g. page refresh)
+      try {
+        const storedUser = await verifyStoredSession();
+        if (storedUser) {
+          startUserSync(storedUser.uid, storedUser);
+          return;
+        }
+      } catch (err: any) {
+        console.warn("Stored session validation error:", err);
+      }
+
+      // 3. If neither, show the non-Telegram browser fallback page
+      setUser(null);
+      setLoading(false);
+    };
+
+    initAuth();
 
     return () => {
-      unsubscribeAuth();
-      if (unsubscribeSnapshot) unsubscribeSnapshot();
+      if (unsubscribeSnapshot) {
+        unsubscribeSnapshot();
+      }
     };
   }, []);
 
+  const handleDevLogin = async () => {
+    setDevLoading(true);
+    setAuthError("");
+    try {
+      const result = await devLoginBypass();
+      if (result.user) {
+        const userRef = doc(db, "users", result.user.uid);
+        onSnapshot(userRef, (snap) => {
+          if (snap.exists()) {
+            setUser({ ...result.user, ...snap.data(), uid: result.user.uid, id: result.user.uid });
+          } else {
+            setUser(result.user);
+          }
+        });
+        setUser(result.user);
+      }
+    } catch (err: any) {
+      setAuthError(err.message || "Dev login xatoligi");
+    } finally {
+      setDevLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    logoutUser();
+    setUser(null);
+  };
+
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-black">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white/20 border-t-white" />
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-zinc-950">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 rounded-full border-3 border-blue-600 border-t-transparent animate-spin" />
+          <span className="text-xs font-semibold text-gray-500 dark:text-zinc-400 tracking-tight">Dastyorchi yuklanmoqda...</span>
+        </div>
       </div>
     );
   }
@@ -242,7 +280,13 @@ export default function App() {
         <NotificationProvider>
           <PaywallProvider>
             <Router>
-              <AppContent user={user} />
+              <AppContent 
+                user={user} 
+                onLogout={handleLogout}
+                onDevLogin={handleDevLogin}
+                devLoading={devLoading}
+                authError={authError}
+              />
             </Router>
           </PaywallProvider>
         </NotificationProvider>

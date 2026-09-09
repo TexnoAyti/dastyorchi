@@ -2,13 +2,24 @@ export type Language = "uz_lat" | "uz_cyr" | "ru" | "en";
 
 export interface User {
   uid: string;
-  email: string;
+  id?: string;
+  telegramId?: number;
+  firstName?: string;
+  lastName?: string;
+  username?: string;
+  email?: string;
   displayName?: string;
   role: "user" | "admin";
-  subscriptionTier: "free" | "pro";
+  subscriptionTier: "free" | "pro" | "business";
+  subscriptionStatus?: "active" | "expired" | "canceled";
+  requestsToday?: number;
+  exportsToday?: number;
   signatureDataUrl?: string;
   avatarUrl?: string;
-  createdAt: number;
+  photoUrl?: string;
+  languageCode?: string;
+  createdAt: any;
+  updatedAt?: any;
 }
 
 export interface PersonProfile {
