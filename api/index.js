@@ -1,3 +1,4 @@
+// server/app.ts
 import express from "express";
 import cors from "cors";
 import HTMLtoDOCX from "html-to-docx";
@@ -8,89 +9,73 @@ import { getFirestore } from "firebase-admin/firestore";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-
 dotenv.config();
-
-// ==========================================
-// 1. FIREBASE ADMIN PRODUCTION INITIALIZATION
-// ==========================================
-let dbAdmin: FirebaseFirestore.Firestore | null = null;
-let firebaseInitStatus = "not_initialized";
-
+var dbAdmin = null;
+var firebaseInitStatus = "not_initialized";
 try {
-  let adminApp: admin.app.App | null = null;
-
+  let adminApp = null;
   if (admin.apps.length > 0) {
-    adminApp = admin.apps[0]!;
+    adminApp = admin.apps[0];
     firebaseInitStatus = "reused_existing_app";
   } else if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
     try {
       let rawKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY.trim();
-      // Handle base64 encoded JSON string if provided
       if (!rawKey.startsWith("{") && !rawKey.startsWith('"')) {
         try {
           const decoded = Buffer.from(rawKey, "base64").toString("utf-8");
           if (decoded.startsWith("{")) {
             rawKey = decoded;
           }
-        } catch (e) {}
+        } catch (e) {
+        }
       }
-
       const serviceAccount = JSON.parse(rawKey);
       if (serviceAccount.private_key) {
-        // Handle escaped newlines in private key string
         serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
       }
-
       adminApp = admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
         projectId: serviceAccount.project_id || process.env.FIREBASE_PROJECT_ID
       });
       firebaseInitStatus = "service_account_cert";
       console.log("[FirebaseAdmin] Successfully initialized with FIREBASE_SERVICE_ACCOUNT_KEY");
-    } catch (parseErr: any) {
+    } catch (parseErr) {
       console.error("[FirebaseAdmin] Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY:", parseErr.message);
     }
   }
-
-  // Fallback if service account key is not provided (e.g. local environment or AI Studio Cloud Run)
   if (!adminApp && admin.apps.length === 0) {
     const configPath = path.join(process.cwd(), "firebase-applet-config.json");
     let projectId = process.env.FIREBASE_PROJECT_ID;
-
     if (fs.existsSync(configPath)) {
       try {
         const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
         projectId = projectId || config.projectId;
-      } catch (e) {}
+      } catch (e) {
+      }
     }
-
     if (projectId) {
       try {
         adminApp = admin.initializeApp({ projectId });
         firebaseInitStatus = "project_id_fallback";
         console.log(`[FirebaseAdmin] Initialized fallback with projectId: ${projectId}`);
-      } catch (e: any) {
+      } catch (e) {
         console.warn("[FirebaseAdmin] Fallback init warning:", e.message);
       }
     }
   }
-
-  // Connect Firestore instance
   if (admin.apps.length > 0) {
-    const currentApp = admin.apps[0]!;
+    const currentApp = admin.apps[0];
     let databaseId = process.env.FIRESTORE_DATABASE_ID;
-
     if (!databaseId) {
       const configPath = path.join(process.cwd(), "firebase-applet-config.json");
       if (fs.existsSync(configPath)) {
         try {
           const cfg = JSON.parse(fs.readFileSync(configPath, "utf-8"));
           databaseId = cfg.firestoreDatabaseId;
-        } catch (e) {}
+        } catch (e) {
+        }
       }
     }
-
     if (databaseId && databaseId !== "(default)") {
       dbAdmin = getFirestore(currentApp, databaseId);
     } else {
@@ -98,16 +83,11 @@ try {
     }
     console.log("[FirebaseAdmin] Firestore ready. Target database:", databaseId || "(default)");
   }
-} catch (err: any) {
+} catch (err) {
   console.error("[FirebaseAdmin] Initialization fatal error:", err.message);
   firebaseInitStatus = "error: " + err.message;
 }
-
-// ==========================================
-// 2. TELEGRAM HMAC VERIFICATION & SESSIONS
-// ==========================================
-
-function verifyTelegramWebAppData(initData: string, botToken: string): { valid: boolean; user?: any; authDate?: number; error?: string } {
+function verifyTelegramWebAppData(initData, botToken) {
   try {
     if (!initData || typeof initData !== "string") {
       return { valid: false, error: "Bo'sh yoki noto'g'ri initData" };
@@ -117,51 +97,36 @@ function verifyTelegramWebAppData(initData: string, botToken: string): { valid: 
     if (!hash) {
       return { valid: false, error: "initData ichida hash topilmadi" };
     }
-
     params.delete("hash");
-
-    // Sort parameters alphabetically
     const keys = Array.from(params.keys()).sort();
-    const checkString = keys.map(key => `${key}=${params.get(key)}`).join("\n");
-
-    // Compute secret key: HMAC-SHA256("WebAppData", botToken)
+    const checkString = keys.map((key) => `${key}=${params.get(key)}`).join("\n");
     const secretKey = crypto.createHmac("sha256", "WebAppData").update(botToken).digest();
-
-    // Compute hash: HMAC-SHA256(secretKey, checkString)
     const calculatedHash = crypto.createHmac("sha256", secretKey).update(checkString).digest("hex");
-
-    // Timing-safe comparison
     const hashBuf = Buffer.from(hash, "hex");
     const calcBuf = Buffer.from(calculatedHash, "hex");
     if (hashBuf.length !== calcBuf.length || !crypto.timingSafeEqual(hashBuf, calcBuf)) {
       return { valid: false, error: "Telegram imzosi (hash) mos kelmadi" };
     }
-
     const authDateStr = params.get("auth_date");
     const authDate = authDateStr ? parseInt(authDateStr, 10) : 0;
-    const now = Math.floor(Date.now() / 1000);
-    // Allow up to 48 hours for auth_date
-    if (!authDate || (now - authDate) > 86400 * 2) {
+    const now = Math.floor(Date.now() / 1e3);
+    if (!authDate || now - authDate > 86400 * 2) {
       return { valid: false, error: "Telegram sessiyasi eskirgan (auth_date expired)" };
     }
-
     const userRaw = params.get("user");
     if (!userRaw) {
       return { valid: false, error: "Foydalanuvchi ma'lumoti topilmadi" };
     }
-
     const user = JSON.parse(userRaw);
     if (!user || !user.id) {
       return { valid: false, error: "Foydalanuvchi IDsi mavjud emas" };
     }
-
     return { valid: true, user, authDate };
-  } catch (err: any) {
+  } catch (err) {
     return { valid: false, error: err.message || "Tasdiqlashda xatolik yuz berdi" };
   }
 }
-
-function getSessionSecret(): string {
+function getSessionSecret() {
   const secret = process.env.SESSION_SECRET?.trim();
   if (secret) {
     return secret;
@@ -171,15 +136,13 @@ function getSessionSecret(): string {
   }
   return process.env.TELEGRAM_BOT_TOKEN?.trim() || "dastyorchi_dev_session_secret";
 }
-
-function createSessionToken(payload: any): string {
+function createSessionToken(payload) {
   const secret = getSessionSecret();
   const data = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const signature = crypto.createHmac("sha256", secret).update(data).digest("base64url");
   return `${data}.${signature}`;
 }
-
-function verifySessionToken(token: string): { valid: boolean; payload?: any; error?: string } {
+function verifySessionToken(token) {
   try {
     if (!token || !token.includes(".")) {
       return { valid: false, error: "Yaroqsiz token formati" };
@@ -191,16 +154,15 @@ function verifySessionToken(token: string): { valid: boolean; payload?: any; err
       return { valid: false, error: "Token imzosi noto'g'ri" };
     }
     const payload = JSON.parse(Buffer.from(data, "base64url").toString("utf-8"));
-    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1e3)) {
       return { valid: false, error: "Sessiya vaqti tugagan" };
     }
     return { valid: true, payload };
-  } catch (err: any) {
+  } catch (err) {
     return { valid: false, error: err.message || "Tokenni tekshirishda xatolik" };
   }
 }
-
-async function upgradeUserSubscription(userId: string, tier: "pro" | "business", provider: string, amount: number) {
+async function upgradeUserSubscription(userId, tier, provider, amount) {
   if (!dbAdmin) {
     console.warn(`[SubscriptionUpgrade] dbAdmin unavailable. Cannot persist upgrade for user: ${userId}`);
     return;
@@ -211,80 +173,58 @@ async function upgradeUserSubscription(userId: string, tier: "pro" | "business",
       subscriptionTier: tier,
       subscriptionStatus: "active",
       requestsToday: 0,
-      updatedAt: new Date().toISOString()
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
     });
     console.log(`[SubscriptionUpgrade] Successfully upgraded user: ${userId} to ${tier} tier via ${provider}`);
-  } catch (err: any) {
+  } catch (err) {
     console.error(`[SubscriptionUpgrade] Error updating user ${userId}:`, err.message);
   }
 }
-
-// ==========================================
-// 3. EXPRESS APPLICATION & ROUTER
-// ==========================================
-export const app = express();
-
+var app = express();
 console.log("[Vercel API] Express app loaded");
 console.log("[Vercel API] Runtime initialized");
-
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
-
-const apiRouter = express.Router();
-
-// ------------------------------------------
-// GET /health or /api/health
-// ------------------------------------------
+var apiRouter = express.Router();
 apiRouter.get("/health", (req, res) => {
   res.json({
     status: "ok",
     runtime: "vercel"
   });
 });
-
-// ------------------------------------------
-// POST /auth/telegram
-// ------------------------------------------
 apiRouter.post("/auth/telegram", async (req, res) => {
   try {
     console.log("[TelegramAuth] request received");
     const { initData, devBypass } = req.body || {};
     const botToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
-
-    // Diagnostic logging according to safety guidelines
     console.log("[TelegramAuth] initData present:", Boolean(initData) ? "yes" : "no");
     console.log("[TelegramAuth] initData length:", initData ? initData.length : 0);
     console.log("[TelegramAuth] TELEGRAM_BOT_TOKEN configured:", Boolean(botToken) ? "yes" : "no");
-
-    let telegramUser: any = null;
+    let telegramUser = null;
     let authDate = 0;
-
     if (botToken) {
       if (!initData) {
         return res.status(400).json({ error: "Telegram initData parametri taqdim etilmagan" });
       }
       const verification = verifyTelegramWebAppData(initData, botToken);
       console.log("[TelegramAuth] validation:", verification.valid ? "pass" : "fail");
-
       if (!verification.valid) {
         return res.status(401).json({ error: verification.error || "Telegram ma'lumotlari tasdiqlanmadi" });
       }
       telegramUser = verification.user;
       authDate = verification.authDate || 0;
-      const now = Math.floor(Date.now() / 1000);
+      const now = Math.floor(Date.now() / 1e3);
       console.log("[TelegramAuth] auth_date age:", now - authDate, "seconds");
       console.log("[TelegramAuth] telegram user id after verification:", telegramUser.id);
     } else {
       if (process.env.NODE_ENV === "production") {
         console.error("[TelegramAuth] Missing TELEGRAM_BOT_TOKEN in production environment");
-        return res.status(500).json({ 
-          error: "Serverda TELEGRAM_BOT_TOKEN sozlanmagan. Iltimos bot tokenini muhit sozlamalariga kiriting." 
+        return res.status(500).json({
+          error: "Serverda TELEGRAM_BOT_TOKEN sozlanmagan. Iltimos bot tokenini muhit sozlamalariga kiriting."
         });
       }
-
       console.warn("[TelegramAuth] TELEGRAM_BOT_TOKEN not set. Running in development test mode.");
-
       if (initData) {
         try {
           const params = new URLSearchParams(initData);
@@ -296,7 +236,6 @@ apiRouter.post("/auth/telegram", async (req, res) => {
           console.warn("[TelegramAuth] Failed to parse user from initData in dev mode");
         }
       }
-
       if (!telegramUser && devBypass) {
         telegramUser = {
           id: 999999999,
@@ -306,26 +245,16 @@ apiRouter.post("/auth/telegram", async (req, res) => {
           language_code: "uz"
         };
       }
-
       if (!telegramUser) {
         return res.status(400).json({ error: "Telegram initData yoki foydalanuvchi ma'lumoti topilmadi" });
       }
     }
-
     const telegramId = Number(telegramUser.id);
     const internalUserId = `tg_${telegramId}`;
-
-    // Admin privileges check via trusted environment variable
-    const adminIds = (process.env.ADMIN_TELEGRAM_IDS || "")
-      .split(",")
-      .map(s => s.trim())
-      .filter(Boolean);
+    const adminIds = (process.env.ADMIN_TELEGRAM_IDS || "").split(",").map((s) => s.trim()).filter(Boolean);
     const isEnvAdmin = adminIds.includes(String(telegramId));
-
-    let userProfile: any = null;
+    let userProfile = null;
     let firestoreStatus = "skipped (no dbAdmin)";
-
-    // Privileged server-side Firestore operations via Firebase Admin SDK
     if (dbAdmin) {
       try {
         const userDocRef = dbAdmin.collection("users").doc(internalUserId);
@@ -336,20 +265,15 @@ apiRouter.post("/auth/telegram", async (req, res) => {
         } else {
           firestoreStatus = "read: user not found";
         }
-      } catch (e: any) {
+      } catch (e) {
         console.error("[TelegramAuth] Firestore read error:", e.message);
         firestoreStatus = "read error: " + e.message;
       }
     }
-
     if (!userProfile) {
-      // New user creation
       const role = isEnvAdmin ? "admin" : "user";
-      const displayName = [telegramUser.first_name, telegramUser.last_name].filter(Boolean).join(" ") ||
-                          telegramUser.username ||
-                          `Foydalanuvchi #${telegramId}`;
+      const displayName = [telegramUser.first_name, telegramUser.last_name].filter(Boolean).join(" ") || telegramUser.username || `Foydalanuvchi #${telegramId}`;
       const avatarUrl = telegramUser.photo_url || `https://api.dicebear.com/7.x/adventurer/svg?seed=${internalUserId}`;
-
       userProfile = {
         uid: internalUserId,
         id: internalUserId,
@@ -366,28 +290,26 @@ apiRouter.post("/auth/telegram", async (req, res) => {
         subscriptionStatus: "active",
         requestsToday: 0,
         exportsToday: 0,
-        lastRequestResetDate: new Date().toLocaleDateString("en-CA"),
-        lastExportResetDate: new Date().toLocaleDateString("en-CA"),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        lastRequestResetDate: (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA"),
+        lastExportResetDate: (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA"),
+        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
       };
-
       if (dbAdmin) {
         try {
           await dbAdmin.collection("users").doc(internalUserId).set(userProfile);
           firestoreStatus = "write: new user created";
-        } catch (e: any) {
+        } catch (e) {
           console.error("[TelegramAuth] Firestore create error:", e.message);
           firestoreStatus = "write error: " + e.message;
         }
       }
     } else {
-      // Update basic telegram metadata
-      const updatedFields: any = {
+      const updatedFields = {
         firstName: telegramUser.first_name || userProfile.firstName || "",
         lastName: telegramUser.last_name || userProfile.lastName || "",
         username: telegramUser.username || userProfile.username || "",
-        updatedAt: new Date().toISOString()
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
       };
       if (telegramUser.photo_url) {
         updatedFields.photoUrl = telegramUser.photo_url;
@@ -398,36 +320,29 @@ apiRouter.post("/auth/telegram", async (req, res) => {
         userProfile.role = "admin";
       }
       userProfile = { ...userProfile, ...updatedFields };
-
       if (dbAdmin) {
         try {
           await dbAdmin.collection("users").doc(internalUserId).update(updatedFields);
           firestoreStatus = "write: user updated";
-        } catch (e: any) {
+        } catch (e) {
           console.error("[TelegramAuth] Firestore update error:", e.message);
           firestoreStatus = "update error: " + e.message;
         }
       }
     }
-
     console.log("[TelegramAuth] Firestore read/write result:", firestoreStatus);
-
-    // Create session token
     const token = createSessionToken({
       uid: internalUserId,
       telegramId,
       role: userProfile.role || "user",
-      iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + (14 * 24 * 60 * 60)
+      iat: Math.floor(Date.now() / 1e3),
+      exp: Math.floor(Date.now() / 1e3) + 14 * 24 * 60 * 60
     });
-
     console.log("[TelegramAuth] session token created: yes");
-
-    // Generate Firebase Custom Token
-    let firebaseCustomToken: string | null = null;
+    let firebaseCustomToken = null;
     if (admin.apps.length > 0) {
       try {
-        const customClaims: Record<string, any> = {
+        const customClaims = {
           telegramId,
           role: userProfile.role || "user"
         };
@@ -437,11 +352,10 @@ apiRouter.post("/auth/telegram", async (req, res) => {
         }
         firebaseCustomToken = await admin.auth().createCustomToken(internalUserId, customClaims);
         console.log("[TelegramAuth] Firebase custom token: success");
-      } catch (tokenErr: any) {
+      } catch (tokenErr) {
         console.error("[TelegramAuth] Firebase custom token: fail -", tokenErr.message);
       }
     }
-
     return res.json({
       success: true,
       token,
@@ -463,15 +377,11 @@ apiRouter.post("/auth/telegram", async (req, res) => {
         updatedAt: userProfile.updatedAt
       }
     });
-  } catch (err: any) {
+  } catch (err) {
     console.error("[TelegramAuth] Unexpected server error:", err);
     return res.status(500).json({ error: "Avtorizatsiyada server xatoligi yuz berdi: " + (err.message || "") });
   }
 });
-
-// ------------------------------------------
-// GET /auth/session
-// ------------------------------------------
 apiRouter.get("/auth/session", async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
@@ -483,21 +393,18 @@ apiRouter.get("/auth/session", async (req, res) => {
     if (!verified.valid || !verified.payload) {
       return res.status(401).json({ error: verified.error || "Yaroqsiz yoki muddati o'tgan sessiya" });
     }
-
     const { uid } = verified.payload;
     let userProfile = null;
-
     if (dbAdmin) {
       try {
         const snap = await dbAdmin.collection("users").doc(uid).get();
         if (snap.exists) {
           userProfile = snap.data();
         }
-      } catch (e: any) {
+      } catch (e) {
         console.warn("Error reading session user profile from Firestore Admin:", e.message);
       }
     }
-
     if (!userProfile) {
       userProfile = {
         uid,
@@ -506,38 +413,31 @@ apiRouter.get("/auth/session", async (req, res) => {
         role: verified.payload.role || "user"
       };
     }
-
     return res.json({
       valid: true,
       user: userProfile
     });
-  } catch (err: any) {
+  } catch (err) {
     return res.status(500).json({ error: "Sessiyani tekshirishda xatolik yuz berdi" });
   }
 });
-
-// ------------------------------------------
-// POST /auth/dev-login (Disabled in production)
-// ------------------------------------------
 apiRouter.post("/auth/dev-login", async (req, res) => {
   if (process.env.NODE_ENV === "production") {
     return res.status(403).json({ error: "Dev login is strictly forbidden in production" });
   }
-
   try {
     const devTelegramId = 999999999;
     const internalUserId = `tg_${devTelegramId}`;
-
-    let userProfile: any = null;
+    let userProfile = null;
     if (dbAdmin) {
       try {
         const snap = await dbAdmin.collection("users").doc(internalUserId).get();
         if (snap.exists) {
           userProfile = snap.data();
         }
-      } catch (e) {}
+      } catch (e) {
+      }
     }
-
     if (!userProfile) {
       userProfile = {
         uid: internalUserId,
@@ -555,28 +455,26 @@ apiRouter.post("/auth/dev-login", async (req, res) => {
         subscriptionStatus: "active",
         requestsToday: 0,
         exportsToday: 0,
-        lastRequestResetDate: new Date().toLocaleDateString("en-CA"),
-        lastExportResetDate: new Date().toLocaleDateString("en-CA"),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        lastRequestResetDate: (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA"),
+        lastExportResetDate: (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA"),
+        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
       };
-
       if (dbAdmin) {
         try {
           await dbAdmin.collection("users").doc(internalUserId).set(userProfile);
-        } catch (e) {}
+        } catch (e) {
+        }
       }
     }
-
     const token = createSessionToken({
       uid: internalUserId,
       telegramId: devTelegramId,
       role: userProfile.role || "admin",
-      iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + (14 * 24 * 60 * 60)
+      iat: Math.floor(Date.now() / 1e3),
+      exp: Math.floor(Date.now() / 1e3) + 14 * 24 * 60 * 60
     });
-
-    let firebaseCustomToken: string | null = null;
+    let firebaseCustomToken = null;
     if (admin.apps.length > 0) {
       try {
         firebaseCustomToken = await admin.auth().createCustomToken(internalUserId, {
@@ -584,38 +482,31 @@ apiRouter.post("/auth/dev-login", async (req, res) => {
           role: "admin",
           admin: true
         });
-      } catch (e: any) {
+      } catch (e) {
         console.warn("Dev custom token generation skipped:", e.message);
       }
     }
-
     return res.json({
       success: true,
       token,
       firebaseCustomToken,
       user: userProfile
     });
-  } catch (err: any) {
+  } catch (err) {
     return res.status(500).json({ error: "Dev login xatoligi: " + err.message });
   }
 });
-
-// ------------------------------------------
-// POST /ai
-// ------------------------------------------
 apiRouter.post("/ai", async (req, res) => {
   let apiKey = "";
   try {
     const { contents, systemInstruction, config, model, customApiKey } = req.body || {};
-    
     apiKey = customApiKey?.trim() || process.env.GEMINI_API_KEY?.trim() || "";
     if (!apiKey || apiKey === "MY_GEMINI_API_KEY" || apiKey === "your_real_key_here") {
       return res.status(401).json({
         error: "GEMINI_API_KEY sozlanmagan. Iltimos, server muhitida GEMINI_API_KEY o'zgaruvchisini sozlang."
       });
     }
-
-    const genAI = new GoogleGenAI({ 
+    const genAI = new GoogleGenAI({
       apiKey,
       httpOptions: {
         headers: {
@@ -623,7 +514,6 @@ apiRouter.post("/ai", async (req, res) => {
         }
       }
     });
-
     const result = await genAI.models.generateContent({
       model: model || "gemini-3.5-flash",
       contents,
@@ -632,17 +522,14 @@ apiRouter.post("/ai", async (req, res) => {
         systemInstruction
       }
     });
-
     const text = result.text;
     return res.json({ text });
-  } catch (error: any) {
+  } catch (error) {
     console.error("AI Server Error:", error);
     const errorMessage = typeof error === "object" ? JSON.stringify(error) + " " + (error.message || "") : String(error);
     const errLower = errorMessage.toLowerCase();
-    
     let status = 500;
     let errorCode = "SERVER_ERROR";
-
     if (errLower.includes("api_key_invalid") || errLower.includes("api key not valid")) {
       status = 401;
       errorCode = "AUTH_ERROR";
@@ -659,52 +546,37 @@ apiRouter.post("/ai", async (req, res) => {
       status = 503;
       errorCode = "SERVER_ERROR";
     }
-
     return res.status(status).json({ error: errorMessage, code: errorCode, original_status: status });
   }
 });
-
-// ------------------------------------------
-// POST /export/docx
-// ------------------------------------------
 apiRouter.post("/export/docx", async (req, res) => {
   try {
     const { html } = req.body;
     if (!html) {
       return res.status(400).json({ error: "HTML content is required" });
     }
-
     const fileBuffer = await HTMLtoDOCX(html, null, {
       table: { row: { cantSplit: true } },
       footer: true,
-      pageNumber: true,
+      pageNumber: true
     });
-
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-    res.setHeader("Content-Disposition", "attachment; filename=\"document.docx\"");
+    res.setHeader("Content-Disposition", 'attachment; filename="document.docx"');
     return res.send(fileBuffer);
   } catch (error) {
     console.error("Error generating DOCX:", error);
     return res.status(500).json({ error: "Failed to generate DOCX" });
   }
 });
-
-// ------------------------------------------
-// POST /payment/create-invoice
-// ------------------------------------------
 apiRouter.post("/payment/create-invoice", async (req, res) => {
   try {
     const { userId, tier, paymentMethod, returnUrl } = req.body;
-
     if (!userId || !tier || !paymentMethod) {
       return res.status(400).json({ error: "To'lov uchun zarur ma'lumotlar yetishmayapti: userId, tier, paymentMethod" });
     }
-
-    const amountUZS = tier === "pro" ? 250000 : 630000;
+    const amountUZS = tier === "pro" ? 25e4 : 63e4;
     const amountTiyins = amountUZS * 100;
-
     let checkoutUrl = "";
-
     if (paymentMethod === "payme") {
       const PAYME_MERCHANT_ID = process.env.PAYME_MERCHANT_ID;
       if (!PAYME_MERCHANT_ID) {
@@ -721,40 +593,32 @@ apiRouter.post("/payment/create-invoice", async (req, res) => {
       }
       const defaultReturnUrl = "https://dastyorchi.uz/profile";
       const finalReturnUrl = returnUrl || defaultReturnUrl;
-
       checkoutUrl = `https://my.click.uz/services/pay?service_id=${CLICK_SERVICE_ID}&merchant_id=${CLICK_MERCHANT_ID}&amount=${amountUZS}&transaction_param=${userId}&return_url=${encodeURIComponent(finalReturnUrl)}`;
     } else {
       return res.status(400).json({ error: "Noma'lum to'lov tizimi turi." });
     }
-
     console.log(`[Payment] Invoice built for user: ${userId}, Tier: ${tier}, Method: ${paymentMethod}`);
     return res.json({ checkoutUrl });
-  } catch (err: any) {
+  } catch (err) {
     console.error("Failed to construct invoice:", err);
     return res.status(500).json({ error: err.message || "To'lov hisobini shakllantirishda xatolik yuz berdi" });
   }
 });
-
-// ------------------------------------------
-// POST /payment/click-webhook
-// ------------------------------------------
 apiRouter.post("/payment/click-webhook", async (req, res) => {
   try {
-    const { 
-      click_trans_id, 
-      service_id, 
-      click_paydoc_id, 
-      merchant_trans_id, 
-      amount, 
-      action, 
-      error, 
-      error_note, 
-      sign_time, 
-      sign_string 
+    const {
+      click_trans_id,
+      service_id,
+      click_paydoc_id,
+      merchant_trans_id,
+      amount,
+      action,
+      error,
+      error_note,
+      sign_time,
+      sign_string
     } = req.body;
-
     console.log("[ClickWebhook] Payload received:", { click_trans_id, action, amount, merchant_trans_id });
-
     const CLICK_MERCHANT_KEY = process.env.CLICK_MERCHANT_KEY;
     if (!CLICK_MERCHANT_KEY) {
       console.error("CLICK_MERCHANT_KEY is not configured on server.");
@@ -762,7 +626,6 @@ apiRouter.post("/payment/click-webhook", async (req, res) => {
     }
     const dataToSign = `${click_trans_id}${service_id}${click_paydoc_id}${merchant_trans_id}${amount}${action}${sign_time}${CLICK_MERCHANT_KEY}`;
     const calculatedSign = crypto.createHash("md5").update(dataToSign).digest("hex");
-
     if (calculatedSign !== sign_string) {
       console.error("Click webhook signature invalid. Received:", sign_string, "Expected:", calculatedSign);
       return res.json({
@@ -770,19 +633,16 @@ apiRouter.post("/payment/click-webhook", async (req, res) => {
         error_note: "Signature authentication verification failed"
       });
     }
-
     const userId = merchant_trans_id;
     if (!userId) {
       return res.json({ error: -2, error_note: "Missing merchant transaction user identification" });
     }
-
     if (dbAdmin) {
       const userSnap = await dbAdmin.collection("users").doc(userId).get();
       if (!userSnap.exists) {
         return res.json({ error: -5, error_note: "Foydalanuvchi hisobi topilmadi (User not found)" });
       }
     }
-
     if (Number(action) === 0) {
       return res.json({
         click_trans_id,
@@ -792,18 +652,14 @@ apiRouter.post("/payment/click-webhook", async (req, res) => {
         error_note: "Success"
       });
     }
-
     if (Number(action) === 1) {
       if (Number(error) < 0) {
         console.warn("CLICK payment error:", error_note);
         return res.json({ error, error_note: "Payment reported error state" });
       }
-
       const paymentAmount = Number(amount);
-      const tier: "pro" | "business" = paymentAmount >= 600000 ? "business" : "pro";
-
+      const tier = paymentAmount >= 6e5 ? "business" : "pro";
       await upgradeUserSubscription(userId, tier, "click", paymentAmount);
-
       return res.json({
         click_trans_id,
         merchant_trans_id,
@@ -812,22 +668,16 @@ apiRouter.post("/payment/click-webhook", async (req, res) => {
         error_note: "To'lov muvaffaqiyatli qabul qilindi hamda obuna faollashtirildi!"
       });
     }
-
     return res.json({ error: -3, error_note: "Invalid interaction action requested" });
-  } catch (err: any) {
+  } catch (err) {
     console.error("Click webhook error:", err);
     return res.status(550).json({ error: -4, error_note: err.message || "Internal server crash" });
   }
 });
-
-// ------------------------------------------
-// POST /payment/payme-webhook
-// ------------------------------------------
 apiRouter.post("/payment/payme-webhook", async (req, res) => {
   try {
     const { method, params, id: jsonRpcId } = req.body;
     console.log(`[PaymeWebhook] method: ${method}`);
-
     const PAYME_MERCHANT_KEY = process.env.PAYME_MERCHANT_KEY;
     if (!PAYME_MERCHANT_KEY) {
       console.error("PAYME_MERCHANT_KEY is not configured on server.");
@@ -855,7 +705,6 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
         id: jsonRpcId
       });
     }
-
     if (!dbAdmin) {
       return res.json({
         jsonrpc: "2.0",
@@ -863,7 +712,6 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
         id: jsonRpcId
       });
     }
-
     if (method === "CheckPerformTransaction") {
       const userId = params.account?.userId;
       if (!userId) {
@@ -873,7 +721,6 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
           id: jsonRpcId
         });
       }
-
       const userSnap = await dbAdmin.collection("users").doc(userId).get();
       if (!userSnap.exists) {
         return res.json({
@@ -882,20 +729,17 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
           id: jsonRpcId
         });
       }
-
       return res.json({
         jsonrpc: "2.0",
         result: { allow: true },
         id: jsonRpcId
       });
     }
-
     if (method === "CreateTransaction") {
       const transId = params.id;
       const userId = params.account?.userId;
       const amount = Number(params.amount);
       const time = params.time;
-
       if (!userId || !transId) {
         return res.json({
           jsonrpc: "2.0",
@@ -903,10 +747,8 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
           id: jsonRpcId
         });
       }
-
       const transRef = dbAdmin.collection("paymeTransactions").doc(transId);
       const transSnap = await transRef.get();
-
       if (transSnap.exists) {
         const transData = transSnap.data();
         if (transData.state === 1) {
@@ -927,7 +769,6 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
           });
         }
       }
-
       const createTime = Date.now();
       await transRef.set({
         id: transId,
@@ -940,7 +781,6 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
         cancel_time: 0,
         reason: 0
       });
-
       return res.json({
         jsonrpc: "2.0",
         result: {
@@ -951,7 +791,6 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
         id: jsonRpcId
       });
     }
-
     if (method === "PerformTransaction") {
       const transId = params.id;
       if (!transId) {
@@ -961,10 +800,8 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
           id: jsonRpcId
         });
       }
-
       const transRef = dbAdmin.collection("paymeTransactions").doc(transId);
       const transSnap = await transRef.get();
-
       if (!transSnap.exists) {
         return res.json({
           jsonrpc: "2.0",
@@ -972,20 +809,16 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
           id: jsonRpcId
         });
       }
-
       const transData = transSnap.data();
       if (transData.state === 1) {
         const uAmountUZS = transData.amount / 100;
-        const tier: "pro" | "business" = uAmountUZS >= 600000 ? "business" : "pro";
-
+        const tier = uAmountUZS >= 6e5 ? "business" : "pro";
         await upgradeUserSubscription(transData.userId, tier, "payme", uAmountUZS);
-
         const performTime = Date.now();
         await transRef.update({
           state: 2,
           perform_time: performTime
         });
-
         return res.json({
           jsonrpc: "2.0",
           result: {
@@ -1013,11 +846,9 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
         });
       }
     }
-
     if (method === "CancelTransaction") {
       const transId = params.id;
       const reason = Number(params.reason || 1);
-
       if (!transId) {
         return res.json({
           jsonrpc: "2.0",
@@ -1025,10 +856,8 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
           id: jsonRpcId
         });
       }
-
       const transRef = dbAdmin.collection("paymeTransactions").doc(transId);
       const transSnap = await transRef.get();
-
       if (!transSnap.exists) {
         return res.json({
           jsonrpc: "2.0",
@@ -1036,7 +865,6 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
           id: jsonRpcId
         });
       }
-
       const transData = transSnap.data();
       if (transData.state === 1) {
         const cancelTime = Date.now();
@@ -1061,12 +889,10 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
           cancel_time: cancelTime,
           reason
         });
-
         await dbAdmin.collection("users").doc(transData.userId).update({
           subscriptionTier: "free",
           subscriptionStatus: "canceled"
         });
-
         return res.json({
           jsonrpc: "2.0",
           result: {
@@ -1088,7 +914,6 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
         });
       }
     }
-
     if (method === "CheckTransaction") {
       const transId = params.id;
       if (!transId) {
@@ -1098,7 +923,6 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
           id: jsonRpcId
         });
       }
-
       const transSnap = await dbAdmin.collection("paymeTransactions").doc(transId).get();
       if (!transSnap.exists) {
         return res.json({
@@ -1107,7 +931,6 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
           id: jsonRpcId
         });
       }
-
       const transData = transSnap.data();
       return res.json({
         jsonrpc: "2.0",
@@ -1122,13 +945,12 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
         id: jsonRpcId
       });
     }
-
     return res.json({
       jsonrpc: "2.0",
       error: { code: -32601, message: "Requested JSON-RPC method not supported" },
       id: jsonRpcId
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error("Payme Webhook crash:", error);
     return res.status(500).json({
       jsonrpc: "2.0",
@@ -1137,22 +959,22 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
     });
   }
 });
-
-// Mount the apiRouter at both "/api" and "/" for versatile routing compatibility
 app.use("/api", apiRouter);
 app.use(apiRouter);
-
-// Express API error handler middleware
-app.use((err: any, req: any, res: any, next: any) => {
+app.use((err, req, res, next) => {
   if (err) {
     console.error("Express API error caught:", err);
-    return res.status(err.status || err.statusCode || 500).json({ 
+    return res.status(err.status || err.statusCode || 500).json({
       error: err.message || "Server Error",
       code: err.code || "SERVER_ERROR"
     });
   }
   next();
 });
-
-export { dbAdmin, firebaseInitStatus };
-export default app;
+var app_default = app;
+export {
+  app,
+  dbAdmin,
+  app_default as default,
+  firebaseInitStatus
+};
