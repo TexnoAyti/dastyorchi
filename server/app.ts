@@ -419,10 +419,45 @@ apiRouter.post("/auth/telegram", async (req, res) => {
 
     console.log("[TelegramAuth] session token created: yes");
 
+    // Generate Firebase Custom Token
+    let firebaseCustomToken: string | null = null;
+    if (admin.apps.length > 0) {
+      try {
+        const customClaims: Record<string, any> = {
+          telegramId,
+          role: userProfile.role || "user"
+        };
+        if (isEnvAdmin || userProfile.role === "admin") {
+          customClaims.role = "admin";
+          customClaims.admin = true;
+        }
+        firebaseCustomToken = await admin.auth().createCustomToken(internalUserId, customClaims);
+        console.log("[TelegramAuth] Firebase custom token creation: SUCCESS");
+      } catch (tokenErr: any) {
+        console.error("[TelegramAuth] Firebase custom token creation failed:", tokenErr.message);
+      }
+    }
+
     return res.json({
       success: true,
       token,
-      user: userProfile
+      firebaseCustomToken,
+      user: {
+        uid: internalUserId,
+        id: internalUserId,
+        telegramId,
+        displayName: userProfile.displayName,
+        username: userProfile.username,
+        firstName: userProfile.firstName,
+        lastName: userProfile.lastName,
+        avatarUrl: userProfile.avatarUrl,
+        photoUrl: userProfile.photoUrl,
+        role: userProfile.role,
+        subscriptionTier: userProfile.subscriptionTier,
+        subscriptionStatus: userProfile.subscriptionStatus,
+        createdAt: userProfile.createdAt,
+        updatedAt: userProfile.updatedAt
+      }
     });
   } catch (err: any) {
     console.error("[TelegramAuth] Unexpected server error:", err);
@@ -537,9 +572,23 @@ apiRouter.post("/auth/dev-login", async (req, res) => {
       exp: Math.floor(Date.now() / 1000) + (14 * 24 * 60 * 60)
     });
 
+    let firebaseCustomToken: string | null = null;
+    if (admin.apps.length > 0) {
+      try {
+        firebaseCustomToken = await admin.auth().createCustomToken(internalUserId, {
+          telegramId: devTelegramId,
+          role: "admin",
+          admin: true
+        });
+      } catch (e: any) {
+        console.warn("Dev custom token generation skipped:", e.message);
+      }
+    }
+
     return res.json({
       success: true,
       token,
+      firebaseCustomToken,
       user: userProfile
     });
   } catch (err: any) {

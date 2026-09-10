@@ -2,106 +2,161 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // 1. Users Profile
-    match /users/{userId} {
-      allow read, write: if true;
+    // Helper functions for authorization
+    function isSignedIn() {
+      return request.auth != null;
     }
 
-    // 2. Chat Sessions
-    match /chats/{chatId} {
-      allow read, write: if true;
-      match /messages/{messageId} {
-        allow read, write: if true;
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.role == 'admin') ||
+        (request.auth.token.admin == true) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // 1. Users Profile & subcollections
+    match /users/{userId} {
+      allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow create: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow update: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow delete: if isAdmin();
+
+      match /notifications/{notificationId} {
+        allow read, write: if isSignedIn() && (isOwner(userId) || isAdmin());
       }
     }
 
-    // 3. Legal Cases
-    match /cases/{caseId} {
-      allow read, write: if true;
+    // 2. Chat Sessions & Messages
+    match /chats/{chatId} {
+      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+
       match /messages/{messageId} {
-        allow read, write: if true;
+        allow read, write: if isSignedIn() && (
+          get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid || isAdmin()
+        );
+      }
+    }
+
+    // 3. Legal Cases & Subcollections
+    match /cases/{caseId} {
+      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+
+      match /messages/{messageId} {
+        allow read, write: if isSignedIn() && (
+          get(/databases/$(database)/documents/cases/$(caseId)).data.userId == request.auth.uid || isAdmin()
+        );
       }
       match /evidence/{evidenceId} {
-        allow read, write: if true;
+        allow read, write: if isSignedIn() && (
+          get(/databases/$(database)/documents/cases/$(caseId)).data.userId == request.auth.uid || isAdmin()
+        );
       }
       match /evidenceReports/{reportId} {
-        allow read, write: if true;
+        allow read, write: if isSignedIn() && (
+          get(/databases/$(database)/documents/cases/$(caseId)).data.userId == request.auth.uid || isAdmin()
+        );
       }
       match /analysisMetrics/{metricId} {
-        allow read, write: if true;
+        allow read, write: if isSignedIn() && (
+          get(/databases/$(database)/documents/cases/$(caseId)).data.userId == request.auth.uid || isAdmin()
+        );
       }
     }
 
-    // 4. Profiles
+    // 4. Person / Client Profiles
     match /profiles/{profileId} {
-      allow read, write: if true;
+      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
-    // 5. Documents
+    // 5. Generated Legal Documents
     match /documents/{docId} {
-      allow read, write: if true;
+      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
     // 6. Archived Documents & Chats
     match /archived_documents/{docId} {
-      allow read, write: if true;
+      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
     match /archived_chats/{chatId} {
-      allow read, write: if true;
+      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+
       match /messages/{messageId} {
-        allow read, write: if true;
+        allow read, write: if isSignedIn() && (
+          get(/databases/$(database)/documents/archived_chats/$(chatId)).data.userId == request.auth.uid || isAdmin()
+        );
       }
     }
     match /archived_messages/{messageId} {
-      allow read, write: if true;
+      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
-    // 7. Internal Settings
+    // 7. Internal System Settings
     match /internal/{docId} {
-      allow read, write: if true;
-    }
-    
-    // 8. User-Scoped Notifications Alerts
-    match /users/{userId}/notifications/{notificationId} {
-      allow read, write: if true;
+      allow read, write: if isAdmin();
     }
 
-    // 9. Announcements
+    // 8. System Announcements
     match /announcements/{annId} {
-      allow read, write: if true;
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
     }
 
-    // 10. Payment Requests
+    // 9. Payment Requests
     match /paymentRequests/{requestId} {
-      allow read, write: if true;
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAdmin();
     }
 
-    // 11. Legal Articles Source Database
+    // 10. Legal Articles Public Library (Read-only for public, admin write)
     match /legal_articles/{articleId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isAdmin();
     }
 
-    // 12. Activities Log
+    // 11. Activities & Audit Logs
     match /activities/{activityId} {
-      allow read, write: if true;
+      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
-    // 13. Language and Script Conversions History
+    // 12. Conversions & Translations History
     match /conversions/{conversionId} {
-      allow read, write: if true;
+      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
-    // 14. Legal Research Reports
+    // 13. Legal Research Reports
     match /research_reports/{reportId} {
-      allow read, write: if true;
+      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
-    // 15. System Audit & Error Logs
+    // 14. System Logs
     match /system_logs/{logId} {
-      allow read, write: if true;
+      allow read, write: if isAdmin();
     }
   }
 }
-
-
-

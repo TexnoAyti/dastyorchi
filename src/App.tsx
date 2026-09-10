@@ -22,7 +22,8 @@ import { LanguageCenter } from "./pages/LanguageCenter";
 import { Research } from "./pages/Research";
 import { EvidencePage } from "./pages/Evidence";
 import { TimelinePage } from "./pages/TimelinePage";
-import { db } from "./firebase";
+import { db, auth } from "./firebase";
+import { onAuthStateChanged } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { requestNotificationPermission, triggerStartupTestNotification } from "./services/notificationService";
@@ -45,9 +46,10 @@ interface AppContentProps {
   onDevLogin: () => Promise<void>;
   devLoading: boolean;
   authError: string;
+  isNotMiniApp?: boolean;
 }
 
-function AppContent({ user, onLogout, onDevLogin, devLoading, authError }: AppContentProps) {
+function AppContent({ user, onLogout, onDevLogin, devLoading, authError, isNotMiniApp }: AppContentProps) {
   const location = useLocation();
   const [isOnline, setIsOnline] = useState(typeof window !== "undefined" ? window.navigator.onLine : true);
 
@@ -83,12 +85,13 @@ function AppContent({ user, onLogout, onDevLogin, devLoading, authError }: AppCo
     return (
       <div className="min-h-[100dvh] h-[100dvh] w-full max-w-full flex flex-col bg-gray-50 dark:bg-zinc-950 overflow-hidden relative">
         <Routes>
-          <Route path="/login" element={<Login onLoginSuccess={(u) => window.location.reload()} />} />
+          <Route path="/login" element={<Login onLoginSuccess={() => window.location.reload()} />} />
           <Route path="*" element={
             <TelegramBrowserFallback 
               onDevLogin={onDevLogin} 
               devLoading={devLoading} 
               errorMessage={authError} 
+              isNotMiniApp={isNotMiniApp}
             />
           } />
         </Routes>
@@ -142,6 +145,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [devLoading, setDevLoading] = useState(false);
   const [authError, setAuthError] = useState<string>("");
+  const [isNotMiniApp, setIsNotMiniApp] = useState(false);
 
   useEffect(() => {
     // Request notification permission on app start and trigger test alert
@@ -157,7 +161,7 @@ export default function App() {
 
     let unsubscribeSnapshot: (() => void) | null = null;
 
-    const startUserSync = (uid: string, initialUser: any) => {
+    const startUserSync = (uid: string, fallbackUser?: any) => {
       if (unsubscribeSnapshot) {
         unsubscribeSnapshot();
         unsubscribeSnapshot = null;
@@ -168,33 +172,31 @@ export default function App() {
         if (snap.exists()) {
           const data = snap.data();
           setUser({
-            ...initialUser,
+            ...fallbackUser,
             ...data,
             uid,
             id: uid
           });
         } else {
-          setUser(initialUser);
+          setUser(fallbackUser || { uid, id: uid });
         }
         setLoading(false);
       }, (err) => {
-        console.warn("User profile snapshot warning:", err);
-        setUser(initialUser);
+        console.warn("[App Init] User profile snapshot warning:", err);
+        setUser(fallbackUser || { uid, id: uid });
         setLoading(false);
       });
     };
 
-    const initAuth = async () => {
-      setLoading(true);
-      setAuthError("");
-
+    const handleTelegramLogin = async () => {
       const windowTelegramExists = typeof window !== "undefined" && Boolean((window as any).Telegram);
       const webAppExists = typeof window !== "undefined" && Boolean((window as any).Telegram?.WebApp);
-      const initDataLength = typeof window !== "undefined" && (window as any).Telegram?.WebApp?.initData ? (window as any).Telegram.WebApp.initData.length : 0;
+      const rawInitData = typeof window !== "undefined" ? (window as any).Telegram?.WebApp?.initData : "";
+      const initDataLength = rawInitData ? rawInitData.length : 0;
 
-      console.log("window.Telegram exists:", windowTelegramExists ? "yes" : "no");
-      console.log("WebApp exists:", webAppExists ? "yes" : "no");
-      console.log("initData length:", initDataLength);
+      console.log("[TelegramCheck] window.Telegram exists:", windowTelegramExists ? "yes" : "no");
+      console.log("[TelegramCheck] WebApp exists:", webAppExists ? "yes" : "no");
+      console.log("[TelegramCheck] initData length:", initDataLength);
 
       const tg = getTelegramWebApp();
       if (tg) {
@@ -204,21 +206,31 @@ export default function App() {
         } catch (e) {}
       }
 
-      // 1. If running inside Telegram WebApp with initData
-      if (isTelegramWebAppEnvironment() && tg?.initData) {
+      // If running inside Telegram WebApp with valid initData
+      if (isTelegramWebAppEnvironment() && rawInitData) {
         try {
-          const authResult = await authenticateWithTelegramInitData(tg.initData);
+          const authResult = await authenticateWithTelegramInitData(rawInitData);
           if (authResult?.user) {
             startUserSync(authResult.user.uid, authResult.user);
             return;
           }
         } catch (err: any) {
-          console.error("Telegram initData authentication error:", err);
+          console.error("[TelegramAuth] Telegram initData authentication error:", err);
           setAuthError(err.message || "Telegram avtorizatsiyasida xatolik yuz berdi");
+          setLoading(false);
+          return;
         }
       }
 
-      // 2. If existing session token exists in localStorage (e.g. page refresh)
+      // If opened inside Telegram but NOT as a proper Mini App (initData.length === 0)
+      if (windowTelegramExists && initDataLength === 0) {
+        console.warn("[TelegramAuth] Mini App Telegram WebApp sifatida ishga tushirilmagan");
+        setIsNotMiniApp(true);
+        setLoading(false);
+        return;
+      }
+
+      // Check stored session token fallback if any
       try {
         const storedUser = await verifyStoredSession();
         if (storedUser) {
@@ -226,17 +238,32 @@ export default function App() {
           return;
         }
       } catch (err: any) {
-        console.warn("Stored session validation error:", err);
+        console.warn("[TelegramAuth] Stored session check error:", err);
       }
 
-      // 3. If neither, show the non-Telegram browser fallback page
+      // If neither, render browser fallback page
       setUser(null);
       setLoading(false);
     };
 
-    initAuth();
+    // A. Check Firebase onAuthStateChanged first
+    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        console.log("[TelegramAuth] Firebase persistent session found for UID:", firebaseUser.uid);
+        startUserSync(firebaseUser.uid, {
+          uid: firebaseUser.uid,
+          id: firebaseUser.uid,
+          displayName: firebaseUser.displayName || "",
+          photoUrl: firebaseUser.photoURL || ""
+        });
+      } else {
+        // B. If Firebase user does not exist: proceed with Telegram login
+        await handleTelegramLogin();
+      }
+    });
 
     return () => {
+      unsubscribeAuth();
       if (unsubscribeSnapshot) {
         unsubscribeSnapshot();
       }
@@ -266,8 +293,8 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
-    logoutUser();
+  const handleLogout = async () => {
+    await logoutUser();
     setUser(null);
   };
 
@@ -294,6 +321,7 @@ export default function App() {
                 onDevLogin={handleDevLogin}
                 devLoading={devLoading}
                 authError={authError}
+                isNotMiniApp={isNotMiniApp}
               />
             </Router>
           </PaywallProvider>

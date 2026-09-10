@@ -1,13 +1,14 @@
-import React, { useState } from "react";
-import { Scale, Send, ShieldCheck, Sparkles, Terminal, ArrowRight, Loader2 } from "lucide-react";
+import React from "react";
+import { Scale, Send, ShieldCheck, Sparkles, Terminal, ArrowRight, Loader2, AlertTriangle } from "lucide-react";
 
 interface TelegramBrowserFallbackProps {
   onDevLogin?: () => Promise<void>;
   devLoading?: boolean;
   errorMessage?: string;
+  isNotMiniApp?: boolean;
 }
 
-export function TelegramBrowserFallback({ onDevLogin, devLoading, errorMessage }: TelegramBrowserFallbackProps) {
+export function TelegramBrowserFallback({ onDevLogin, devLoading, errorMessage, isNotMiniApp }: TelegramBrowserFallbackProps) {
   const isDev = Boolean(import.meta.env?.DEV);
   const botUsername = "dastyorchi_bot"; // Configurable bot handle
   const telegramBotUrl = `https://t.me/${botUsername}`;
@@ -29,15 +30,21 @@ export function TelegramBrowserFallback({ onDevLogin, devLoading, errorMessage }
         >
           {/* Logo Badge */}
           <div className="inline-flex items-center justify-center w-20 h-20 rounded-[24px] bg-gradient-to-tr from-blue-600 to-indigo-500 text-white shadow-lg shadow-blue-500/25 mb-6">
-            <Scale className="w-10 h-10 stroke-[2.2]" />
+            {isNotMiniApp ? (
+              <AlertTriangle className="w-10 h-10 stroke-[2.2] text-amber-300" />
+            ) : (
+              <Scale className="w-10 h-10 stroke-[2.2]" />
+            )}
           </div>
 
           <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-gray-900 dark:text-white mb-2">
-            Dastyorchi Telegram orqali ishlaydi
+            {isNotMiniApp ? "Mini App Telegram WebApp sifatida ishga tushirilmagan" : "Dastyorchi Telegram orqali ishlaydi"}
           </h1>
 
           <p className="text-sm sm:text-base text-gray-600 dark:text-zinc-400 leading-relaxed mb-6 font-normal">
-            Ushbu xizmat Telegram WebApp platformasi uchun maxsus ishlab chiqilgan. Shaxsiy yuridik AI yordamchi va hujjatlar generatoridan foydalanish uchun rasmiy Telegram botimiz orqali kiring.
+            {isNotMiniApp
+              ? "Ushbu sahifa Telegram ichki brauzerida oddiy havola orqali ochilgan. Telegram xavfsiz avtorizatsiyasi va foydalanuvchi hisobiga kirish uchun ilovani rasmiy botimizdagi Mini App (menyu tugmasi) orqali oching."
+              : "Ushbu xizmat Telegram WebApp platformasi uchun maxsus ishlab chiqilgan. Shaxsiy yuridik AI yordamchi va hujjatlar generatoridan foydalanish uchun rasmiy Telegram botimiz orqali kiring."}
           </p>
 
           {errorMessage && (

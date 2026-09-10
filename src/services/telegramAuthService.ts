@@ -1,4 +1,6 @@
 // Telegram WebApp Authentication Client Service
+import { signInWithCustomToken } from "firebase/auth";
+import { auth } from "../firebase";
 import { User } from "../types";
 
 export interface TelegramUserUnsafe {
@@ -58,7 +60,13 @@ export function getTelegramUnsafeUser(): TelegramUserUnsafe | null {
   return tg?.initDataUnsafe?.user || null;
 }
 
-export async function authenticateWithTelegramInitData(initData: string): Promise<{ user: User; token: string }> {
+export interface AuthResponse {
+  user: User;
+  token: string;
+  firebaseCustomToken?: string;
+}
+
+export async function authenticateWithTelegramInitData(initData: string): Promise<AuthResponse> {
   const response = await fetch("/api/auth/telegram", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -70,10 +78,27 @@ export async function authenticateWithTelegramInitData(initData: string): Promis
     throw new Error(errorData.error || "Telegram orqali avtorizatsiya amalga oshmadi");
   }
 
-  const data = await response.json();
+  const data: AuthResponse = await response.json();
   if (data.token) {
     localStorage.setItem(TOKEN_KEY, data.token);
   }
+
+  console.log("[TelegramAuth] Telegram verified: YES");
+  console.log("[TelegramAuth] Firebase custom token received:", Boolean(data.firebaseCustomToken) ? "YES" : "NO");
+
+  if (data.firebaseCustomToken) {
+    try {
+      await signInWithCustomToken(auth, data.firebaseCustomToken);
+      console.log("[TelegramAuth] Firebase signInWithCustomToken: SUCCESS");
+      console.log("[TelegramAuth] Firebase UID:", auth.currentUser?.uid);
+    } catch (firebaseErr: any) {
+      console.error("[TelegramAuth] Firebase signInWithCustomToken FAILED:", firebaseErr.message);
+      throw new Error("Firebase avtorizatsiyasida xatolik: " + (firebaseErr.message || ""));
+    }
+  } else {
+    console.warn("[TelegramAuth] Notice: Server did not return a firebaseCustomToken (check FIREBASE_SERVICE_ACCOUNT_KEY in backend configuration)");
+  }
+
   return data;
 }
 
@@ -101,7 +126,7 @@ export async function verifyStoredSession(): Promise<User | null> {
   }
 }
 
-export async function devLoginBypass(): Promise<{ user: User; token: string }> {
+export async function devLoginBypass(): Promise<AuthResponse> {
   const response = await fetch("/api/auth/dev-login", {
     method: "POST",
     headers: { "Content-Type": "application/json" }
@@ -112,13 +137,27 @@ export async function devLoginBypass(): Promise<{ user: User; token: string }> {
     throw new Error(errorData.error || "Dev login muvaffaqiyatsiz bo'ldi");
   }
 
-  const data = await response.json();
+  const data: AuthResponse = await response.json();
   if (data.token) {
     localStorage.setItem(TOKEN_KEY, data.token);
   }
+
+  if (data.firebaseCustomToken) {
+    try {
+      await signInWithCustomToken(auth, data.firebaseCustomToken);
+      console.log("[TelegramAuth] Dev Firebase signInWithCustomToken: SUCCESS, UID:", auth.currentUser?.uid);
+    } catch (firebaseErr: any) {
+      console.warn("Dev Firebase signInWithCustomToken notice:", firebaseErr.message);
+    }
+  }
+
   return data;
 }
 
-export function logoutUser() {
+export async function logoutUser() {
   localStorage.removeItem(TOKEN_KEY);
+  try {
+    await auth.signOut();
+  } catch (e) {}
 }
+
