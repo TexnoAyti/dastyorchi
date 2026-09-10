@@ -109,9 +109,10 @@ service cloud.firestore {
       allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
-    // 7. Internal System Settings
+    // 7. Internal System Settings, Plans & Quota Limits
     match /internal/{docId} {
-      allow read, write: if isAdmin();
+      allow read: if true;
+      allow write: if isAdmin();
     }
 
     // 8. System Announcements

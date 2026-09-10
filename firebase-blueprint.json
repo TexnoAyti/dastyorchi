@@ -186,9 +186,18 @@
         "updatedAt": { "type": "integer" }
       },
       "required": ["userId", "question", "category", "summary", "createdAt", "updatedAt"]
+    },
+    "InternalConfig": {
+      "title": "InternalConfig",
+      "description": "Global system configurations such as plan limits, subscription options, and legal metadata.",
+      "type": "object"
     }
   },
   "firestore": {
+    "/internal/{docId}": {
+      "schema": { "$ref": "#/entities/InternalConfig" },
+      "description": "Stores system configuration, plan limits, and legal metadata."
+    },
     "/research_reports/{reportId}": {
       "schema": { "$ref": "#/entities/ResearchReport" },
       "description": "Stores user-specific legal research reports."
