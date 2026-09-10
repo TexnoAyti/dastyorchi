@@ -188,6 +188,14 @@ export default function App() {
       setLoading(true);
       setAuthError("");
 
+      const windowTelegramExists = typeof window !== "undefined" && Boolean((window as any).Telegram);
+      const webAppExists = typeof window !== "undefined" && Boolean((window as any).Telegram?.WebApp);
+      const initDataLength = typeof window !== "undefined" && (window as any).Telegram?.WebApp?.initData ? (window as any).Telegram.WebApp.initData.length : 0;
+
+      console.log("window.Telegram exists:", windowTelegramExists ? "yes" : "no");
+      console.log("WebApp exists:", webAppExists ? "yes" : "no");
+      console.log("initData length:", initDataLength);
+
       const tg = getTelegramWebApp();
       if (tg) {
         try {
