@@ -13,11 +13,40 @@
         "subscriptionStatus": { "type": "string", "enum": ["active", "expired", "canceled"] },
         "requestsToday": { "type": "integer" },
         "exportsToday": { "type": "integer" },
+        "aiCreditsDailyLimit": { "type": "integer" },
+        "aiCreditsUsedToday": { "type": "integer" },
+        "aiCreditsRemaining": { "type": "integer" },
+        "aiCreditResetDate": { "type": "string" },
+        "lifetimeAiCreditsUsed": { "type": "integer" },
+        "totalGeminiInputTokens": { "type": "integer" },
+        "totalGeminiOutputTokens": { "type": "integer" },
+        "lastAiRequestAt": { "type": "string", "format": "timestamp" },
         "lastRequestResetDate": { "type": "string" },
         "lastExportResetDate": { "type": "string" },
         "createdAt": { "type": "string", "format": "timestamp" }
       },
       "required": ["uid", "email", "role", "subscriptionTier", "createdAt"]
+    },
+    "AIUsage": {
+      "title": "AIUsage",
+      "description": "Server-authoritative ledger of AI credit reservations and Gemini token accounting.",
+      "type": "object",
+      "properties": {
+        "requestId": { "type": "string" },
+        "userId": { "type": "string" },
+        "operation": { "type": "string", "enum": ["chat", "reasoning", "document", "file_analysis", "deep_analysis"] },
+        "creditCost": { "type": "integer" },
+        "status": { "type": "string", "enum": ["RESERVED", "COMPLETED", "REFUNDED", "FAILED"] },
+        "model": { "type": "string" },
+        "inputTokens": { "type": "integer" },
+        "outputTokens": { "type": "integer" },
+        "totalTokens": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "timestamp" },
+        "completedAt": { "type": "string", "format": "timestamp" },
+        "refundedAt": { "type": "string", "format": "timestamp" },
+        "error": { "type": "string" }
+      },
+      "required": ["requestId", "userId", "operation", "creditCost", "status", "model", "createdAt"]
     },
     "PersonProfile": {
       "title": "PersonProfile",
@@ -194,6 +223,10 @@
     }
   },
   "firestore": {
+    "/ai_usage/{requestId}": {
+      "schema": { "$ref": "#/entities/AIUsage" },
+      "description": "Stores server-authoritative AI credit usage ledger."
+    },
     "/internal/{docId}": {
       "schema": { "$ref": "#/entities/InternalConfig" },
       "description": "Stores system configuration, plan limits, and legal metadata."

@@ -159,5 +159,11 @@ service cloud.firestore {
     match /system_logs/{logId} {
       allow read, write: if isAdmin();
     }
+
+    // 15. Server-Authoritative AI Usage Ledger
+    match /ai_usage/{requestId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if false; // Server-only via Firebase Admin SDK
+    }
   }
 }

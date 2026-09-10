@@ -1,7 +1,8 @@
-import { Language, RiskAnalysis } from "../types";
+import { Language, RiskAnalysis, AIOperationType } from "../types";
 import { LEGAL_LIBRARY } from "../data/legalLibrary";
 import { LegalService } from "./legalService";
 import { pipelineTracker } from "../utils/pipelineTracker";
+import { auth } from "../firebase";
 
 const SYSTEM_INSTRUCTION = `You are an elite legal AI assistant for Uzbekistan.
 
@@ -81,21 +82,45 @@ export async function callAIServer(params: {
   systemInstruction?: string;
   model?: string;
   config?: any;
+  operation?: AIOperationType;
 }, onRetry?: (msg: string) => void): Promise<string> {  
-  let customApiKey = localStorage.getItem("custom_gemini_api_key") || "";
-  
   let attempts = 0;
-  const maxRetries = 3;
-  const retryDelays = [2000, 5000, 10000];
-  let currentModel = params.model || "gemini-3.5-flash";
+  const maxRetries = 2;
+  const retryDelays = [2000, 5000];
+  let currentModel = params.model;
+  const operation = params.operation || "chat";
+
+  // Get session token or Firebase auth ID token
+  const sessionToken = localStorage.getItem("dastyorchi_session_token");
+  let idToken: string | null = null;
+  try {
+    if (auth.currentUser) {
+      idToken = await auth.currentUser.getIdToken();
+    }
+  } catch (e) {}
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json"
+  };
+  if (sessionToken) {
+    headers["Authorization"] = `Bearer ${sessionToken}`;
+  } else if (idToken) {
+    headers["Authorization"] = `Bearer ${idToken}`;
+  }
 
   while (true) {
     let response: Response;
     try {
       response = await fetch("/api/ai", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...params, model: currentModel, customApiKey }),
+        headers,
+        body: JSON.stringify({
+          contents: params.contents,
+          systemInstruction: params.systemInstruction,
+          config: params.config,
+          model: currentModel,
+          operation
+        }),
       });
     } catch (fetchErr: any) {
       console.warn(`[callAIServer] Fetch error (attempt ${attempts + 1}/${maxRetries + 1}):`, fetchErr);
@@ -115,11 +140,9 @@ export async function callAIServer(params: {
 
     if (!response.ok) {
       let errorData: any = {};
-      let isHtmlError = false;
       try {
         const responseText = await response.text();
         if (responseText.trim().toLowerCase().startsWith("<!doctype") || responseText.trim().toLowerCase().startsWith("<html")) {
-           isHtmlError = true;
            errorData = { error: "Xizmat vaqtinchalik mavjud emas yoki ulanishda xatolik." };
         } else {
            errorData = JSON.parse(responseText);
@@ -132,30 +155,28 @@ export async function callAIServer(params: {
       const errorCode = errorData.code;
       const originalStatus = errorData.original_status || response.status;
       
-      const isOverloaded = originalStatus === 503 || errorCode === "SERVER_ERROR";
+      // Credit limit exceeded
+      if (errorCode === "AI_CREDIT_LIMIT" || originalStatus === 429) {
+        throw new AIServerError(
+          errorMessage || "Bugungi bepul AI limitingiz tugadi. AI kreditlaringiz ertaga yangilanadi.",
+          429,
+          errorData
+        );
+      }
+
+      const isOverloaded = originalStatus === 503 || errorCode === "SERVER_ERROR" || errorCode === "PROVIDER_RATE_LIMIT";
 
       if (isOverloaded) {
-          if (currentModel !== "gemini-3.1-flash-lite") {
-               currentModel = "gemini-3.1-flash-lite";
-               console.log(`Fallback activation: Switched to ${currentModel}`);
-               if (onRetry) onRetry("Asosiy model band. Tezkor Lite modelga o'tildi.");
-          }
-
           if (attempts < maxRetries) {
-              const delay = retryDelays[attempts];
+              const delay = retryDelays[attempts] || 3000;
               attempts++;
-              console.log(`Retry count: ${attempts}, active model: ${currentModel}, waiting ${delay}ms`);
+              console.log(`Retry count: ${attempts}, waiting ${delay}ms`);
               
               if (onRetry) onRetry("AI serverida vaqtinchalik yuklama mavjud. Tizim avtomatik qayta urinmoqda...");
-              
-              setTimeout(() => {
-                  if (onRetry) onRetry("Javob tayyorlanmoqda. Iltimos kuting...");
-              }, 500);
-              
               await new Promise(r => setTimeout(r, delay));
               continue;
           } else {
-              throw new AIServerError("Hozirda AI serverlarida yuqori yuklama kuzatilmoqda. Iltimos bir necha daqiqadan so'ng qayta urinib ko'ring.", 503, errorData);
+              throw new AIServerError(errorMessage || "Hozirda AI serverlarida yuqori yuklama kuzatilmoqda. Iltimos, bir necha daqiqadan so'ng qayta urinib ko'ring.", 503, errorData);
           }
       }
       
@@ -167,28 +188,8 @@ export async function callAIServer(params: {
         throw new AIServerError("Suhbat hajmi juda kattalashib ketdi. Yangi suhbat (Chat) boshlashni tavsiya qilamiz.", 400, errorData);
       }
 
-      const isAuthError = errorCode === "AUTH_ERROR" || originalStatus === 401;
-      const isQuotaError = errorCode === "AI_QUOTA_LIMIT" || originalStatus === 429;
-
-      if (!isHtmlError && (isAuthError || isQuotaError)) {
-        let promptText = "Tizimdagi Gemini kaliti ishlamayapti yoki yaroqsiz.\n\nSuhbatni davom ettirish uchun shu yerga Haqiqiy Gemini API kalitini kiriting (https://aistudio.google.com/app/apikey dan olingan):";
-        
-        if (isAuthError) {
-          promptText = "Google Gemini API kaliti topilmadi yoki xato!\n\nSuhbatni boshlash uchun shu yerga o'zingizning bepul Gemini API kalitingizni kiriting (Olmagan bo'lsangiz: https://aistudio.google.com/app/apikey):";
-        } else if (isQuotaError) {
-          promptText = "Google Gemini API bepul limitiga yetdingiz (Quota Exceeded)!\n\nSuhbatni davom ettirish uchun o'zingizning bepul Gemini API kalitingizni kiriting (Mavjud bo'lmasa, uni https://aistudio.google.com/app/apikey - saytidan 1 daqiqada mutlaqo bepul olishingiz mumkin):";
-        }
-        
-        const newKey = window.prompt(promptText);
-        
-        if (newKey && newKey.trim().length > 10) {
-           localStorage.setItem("custom_gemini_api_key", newKey.trim());
-           customApiKey = newKey.trim();
-           // Retry with new key
-           continue;
-        } else {
-           localStorage.removeItem("custom_gemini_api_key");
-        }
+      if (errorCode === "UNAUTHORIZED" || originalStatus === 401) {
+        throw new AIServerError("Iltimos, tizimga qayta kiring (Sessiya muddati tugagan).", 401, errorData);
       }
 
       throw new AIServerError(errorMessage, originalStatus, errorData);
@@ -205,6 +206,17 @@ export async function callAIServer(params: {
        throw new Error(e.message || "Server javobini o'qishda xatolik.");
     }
     
+    // Broadcast updated credits to UI
+    if (typeof window !== "undefined" && (data.creditsRemaining !== undefined || data.creditsDailyLimit !== undefined)) {
+      window.dispatchEvent(new CustomEvent("ai-credits-updated", {
+        detail: {
+          creditsRemaining: data.creditsRemaining,
+          creditsDailyLimit: data.creditsDailyLimit,
+          creditsUsedToday: data.creditsUsedToday
+        }
+      }));
+    }
+
     return data.text;
   }
 }
@@ -217,7 +229,8 @@ export async function generateChatTitle(message: string, language: Language | "e
   try {
     const text = await callAIServer({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      config: { temperature: 0.3 }
+      config: { temperature: 0.3 },
+      operation: "chat"
     });
     return text?.trim().replace(/["']/g, '') || "Yangi suhbat";
   } catch (e) {
@@ -580,7 +593,8 @@ If unsure -> default to:
         const chunkResponse = await callAIServer({
           contents: [{ role: 'user', parts: [{ text: chunkPrompt }] }],
           systemInstruction: SYSTEM_INSTRUCTION,
-          config: { temperature: 0.2 }
+          config: { temperature: 0.2 },
+          operation: "deep_analysis"
         }, onRetry);
         
         const chunkLatency = Date.now() - chunkStartTime;
@@ -639,7 +653,8 @@ If unsure -> default to:
       const text = await callAIServer({
         contents: [{ role: 'user', parts: [{ text: synthesisPrompt }] }],
         systemInstruction: SYSTEM_INSTRUCTION,
-        config: { temperature: 0.7 }
+        config: { temperature: 0.7 },
+        operation: "deep_analysis"
       }, onRetry);
       
       const sEndTime = Date.now();
@@ -699,10 +714,12 @@ If unsure -> default to:
 
   try {
     const sStartTime = Date.now();
+    const operation: AIOperationType = (files && files.length > 0) ? "file_analysis" : "chat";
     const text = await callAIServer({
       contents,
       systemInstruction: SYSTEM_INSTRUCTION,
-      config: { temperature: 0.7 }
+      config: { temperature: 0.7 },
+      operation
     }, onRetry);
     
     const sEndTime = Date.now();
@@ -773,25 +790,13 @@ Requirements: Valid HTML, auto-fill all missing fields with realistic dummy data
   try {
     const text = await callAIServer({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      config: { temperature: 0.7 }
+      config: { temperature: 0.7 },
+      operation: "document"
     }, onRetry);
 
     return cleanAndValidateHTML(text);
   } catch (error: any) {
     console.error("AI HTML Generation Error:", error.message || error);
-    const isQuotaOrAuthError = 
-      error?.message?.includes("Gemini API kaliti xato") ||
-      error?.message?.includes("bepul so'rovlar limitiga") ||
-      error?.message?.includes("Quota Exceeded") ||
-      error?.message?.includes("RESOURCE_EXHAUSTED") ||
-      error?.message?.includes("429") ||
-      error?.message?.toLowerCase().includes("quota") ||
-      error?.message?.toLowerCase().includes("exhausted") ||
-      (error?.message?.toLowerCase().includes("limit") && !error?.message?.toLowerCase().includes("payload") && !error?.message?.toLowerCase().includes("context") && !error?.message?.toLowerCase().includes("size"));
-
-    if (isQuotaOrAuthError) {
-      throw new Error(error.message);
-    }
     throw new Error(error.message || "Hujjatni yaratishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.");
   }
 }
@@ -820,25 +825,13 @@ Return ONLY the final document text. No markdown.
     const text = await callAIServer({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       systemInstruction: SYSTEM_INSTRUCTION,
-      config: { temperature: 0.7 }
+      config: { temperature: 0.7 },
+      operation: "document"
     }, onRetry);
 
     return text;
   } catch (error: any) {
     console.error("AI Generation Error:", error.message || error);
-    const isQuotaOrAuthError = 
-      error?.message?.includes("Gemini API kaliti xato") ||
-      error?.message?.includes("bepul so'rovlar limitiga") ||
-      error?.message?.includes("Quota Exceeded") ||
-      error?.message?.includes("RESOURCE_EXHAUSTED") ||
-      error?.message?.includes("429") ||
-      error?.message?.toLowerCase().includes("quota") ||
-      error?.message?.toLowerCase().includes("exhausted") ||
-      (error?.message?.toLowerCase().includes("limit") && !error?.message?.toLowerCase().includes("payload") && !error?.message?.toLowerCase().includes("context") && !error?.message?.toLowerCase().includes("size"));
-
-    if (isQuotaOrAuthError) {
-       throw new Error(error.message);
-    }
     throw new Error(error.message || "Hujjatni yaratishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.");
   }
 }

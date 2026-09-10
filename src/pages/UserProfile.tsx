@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { User as AuthUser } from "firebase/auth";
 import { doc, getDoc, updateDoc, onSnapshot } from "firebase/firestore";
 import { db, auth } from "../firebase";
-import { User, Mail, CreditCard, Check, Loader2, Camera, Crown, Sparkles, Key, Save, Eye, EyeOff, Trash2, Globe } from "lucide-react";
+import { User, Mail, CreditCard, Check, Loader2, Camera, Crown, Sparkles, Save, Globe, Zap, ShieldCheck, Cpu, AlertCircle, Lock } from "lucide-react";
 import { motion } from "framer-motion";
 import { useLanguage } from "../contexts/LanguageContext";
 
@@ -27,9 +27,47 @@ export function UserProfile({ user }: { user?: any }) {
   const [subscriptionTier, setSubscriptionTier] = useState<"free" | "pro" | "business">(user?.subscriptionTier || "free");
   const [requestsToday, setRequestsToday] = useState(user?.requestsToday || 0);
   const [exportsToday, setExportsToday] = useState(user?.exportsToday || 0);
+  const [aiCreditsRemaining, setAiCreditsRemaining] = useState<number>(user?.aiCreditsRemaining ?? 10);
+  const [aiCreditsDailyLimit, setAiCreditsDailyLimit] = useState<number>(user?.aiCreditsDailyLimit ?? 10);
+  const [aiCreditsUsedToday, setAiCreditsUsedToday] = useState<number>(user?.aiCreditsUsedToday ?? 0);
   const [message, setMessage] = useState({ type: "", text: "" });
-  const [customGeminiKey, setCustomGeminiKey] = useState(localStorage.getItem("custom_gemini_api_key") || "");
-  const [showKeyField, setShowKeyField] = useState(false);
+
+  // Clean up any legacy custom API key from localStorage automatically
+  useEffect(() => {
+    localStorage.removeItem("custom_gemini_api_key");
+  }, []);
+
+  // Real-time credit updates from custom event
+  useEffect(() => {
+    const handleCreditsUpdated = (e: any) => {
+      if (e.detail) {
+        if (typeof e.detail.creditsRemaining === "number") setAiCreditsRemaining(e.detail.creditsRemaining);
+        if (typeof e.detail.creditsDailyLimit === "number") setAiCreditsDailyLimit(e.detail.creditsDailyLimit);
+        if (typeof e.detail.creditsUsedToday === "number") setAiCreditsUsedToday(e.detail.creditsUsedToday);
+      }
+    };
+    window.addEventListener("ai-credits-updated", handleCreditsUpdated);
+    return () => window.removeEventListener("ai-credits-updated", handleCreditsUpdated);
+  }, []);
+
+  // Fetch credits status from server
+  useEffect(() => {
+    const fetchCredits = async () => {
+      try {
+        const sessionToken = localStorage.getItem("dastyorchi_session_token");
+        const headers: Record<string, string> = {};
+        if (sessionToken) headers["Authorization"] = `Bearer ${sessionToken}`;
+        const res = await fetch("/api/ai/credits", { headers });
+        if (res.ok) {
+          const data = await res.json();
+          if (typeof data.creditsRemaining === "number") setAiCreditsRemaining(data.creditsRemaining);
+          if (typeof data.creditsDailyLimit === "number") setAiCreditsDailyLimit(data.creditsDailyLimit);
+          if (typeof data.creditsUsedToday === "number") setAiCreditsUsedToday(data.creditsUsedToday);
+        }
+      } catch (e) {}
+    };
+    fetchCredits();
+  }, []);
 
   useEffect(() => {
     const targetUid = user?.uid || auth.currentUser?.uid;
@@ -47,6 +85,9 @@ export function UserProfile({ user }: { user?: any }) {
         setSubscriptionTier(data.subscriptionTier || "free");
         setRequestsToday(data.requestsToday || 0);
         setExportsToday(data.exportsToday || 0);
+        if (typeof data.aiCreditsRemaining === "number") setAiCreditsRemaining(data.aiCreditsRemaining);
+        if (typeof data.aiCreditsDailyLimit === "number") setAiCreditsDailyLimit(data.aiCreditsDailyLimit);
+        if (typeof data.aiCreditsUsedToday === "number") setAiCreditsUsedToday(data.aiCreditsUsedToday);
       }
       setLoading(false);
     }, (err) => {
@@ -73,12 +114,6 @@ export function UserProfile({ user }: { user?: any }) {
         subscriptionTier,
         updatedAt: new Date().getTime()
       });
-
-      if (customGeminiKey.trim()) {
-        localStorage.setItem("custom_gemini_api_key", customGeminiKey.trim());
-      } else {
-        localStorage.removeItem("custom_gemini_api_key");
-      }
 
       setMessage({ type: "success", text: "Profil ma'lumotlari muvaffaqiyatli saqlandi!" });
     } catch (err: any) {
@@ -230,7 +265,7 @@ export function UserProfile({ user }: { user?: any }) {
                       className="w-full pl-11 pr-10 py-3 border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400 outline-none text-sm font-medium cursor-not-allowed"
                     />
                     <div className="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none" title={language === 'uz_lat' ? 'O\'zgartirib bo\'lmaydi' : language === 'uz_cyr' ? 'Ўзгартириб бўлмайди' : language === 'ru' ? 'Не подлежит изменению' : 'Locked email identity'}>
-                      <Key className="w-4 h-4 text-gray-400" />
+                      <Lock className="w-4 h-4 text-gray-400" />
                     </div>
                   </div>
                 </div>
@@ -286,28 +321,43 @@ export function UserProfile({ user }: { user?: any }) {
 
                 {/* Usage Statistics Telemetry */}
                 <div className="p-6 rounded-2xl border border-gray-200 dark:border-zinc-800 bg-gray-50/50 dark:bg-zinc-950/20">
-                  <h3 className="font-bold text-xs uppercase tracking-wider text-gray-400 dark:text-zinc-500 mb-4">
-                    {language === 'uz_lat' ? 'Bugungi Foydalanish Ko\'rsatkichlaringiz' : language === 'uz_cyr' ? 'Бугунги Фойдаланиш Кўрсаткичларингиз' : language === 'ru' ? 'Показатели использования за сегодня' : 'Your Usage Statistics Today'}
-                  </h3>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-bold text-xs uppercase tracking-wider text-gray-400 dark:text-zinc-500">
+                      {language === 'uz_lat' ? 'Bugungi Foydalanish Ko\'rsatkichlaringiz' : language === 'uz_cyr' ? 'Бугунги Фойдаланиш Кўрсаткичларингиз' : language === 'ru' ? 'Показатели использования за сегодня' : 'Your Usage Statistics Today'}
+                    </h3>
+                    <span className="text-[11px] font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/50 px-2.5 py-1 rounded-full border border-blue-100 dark:border-blue-900/30">
+                      Toshkent vaqti (00:00 da yangilanadi)
+                    </span>
+                  </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="bg-white dark:bg-zinc-900 p-5 rounded-xl border border-gray-200 dark:border-zinc-800 shadow-xs">
-                      <span className="text-xs font-bold text-gray-400 dark:text-zinc-500 uppercase tracking-wide block mb-1">
-                        {language === 'uz_lat' ? 'AI Maslahatlar (Bugun)' : language === 'uz_cyr' ? 'AI Маслаҳатлар (Бугун)' : language === 'ru' ? 'AI Консультации (Сегодня)' : 'AI Advice (Today)'}
-                      </span>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-bold text-gray-400 dark:text-zinc-500 uppercase tracking-wide">
+                          AI Kreditlar (Qoldiq)
+                        </span>
+                        <Zap className="w-4 h-4 text-amber-500 fill-amber-500" />
+                      </div>
                       <span className="text-3xl font-black text-gray-900 dark:text-zinc-50">
-                        {requestsToday} <span className="text-xs font-bold text-gray-400 dark:text-zinc-500">/ {subscriptionTier === "free" ? "10" : (language === 'uz_lat' ? 'Cheksiz' : language === 'uz_cyr' ? 'Чексиз' : language === 'ru' ? 'Безлимит' : 'Unlimited')}</span>
+                        {aiCreditsRemaining} <span className="text-xs font-bold text-gray-400 dark:text-zinc-500">/ {aiCreditsDailyLimit} kredit</span>
                       </span>
                       <div className="w-full bg-gray-100 dark:bg-zinc-800 h-2 rounded-full mt-3 overflow-hidden">
                         <div 
-                          className="bg-blue-600 h-full rounded-full transition-all duration-500" 
-                          style={{ width: `${subscriptionTier === "free" ? Math.min(100, (requestsToday / 10) * 100) : 100}%` }}
+                          className={`h-full rounded-full transition-all duration-500 ${aiCreditsRemaining <= 2 ? 'bg-amber-500' : 'bg-blue-600'}`} 
+                          style={{ width: `${Math.min(100, Math.max(0, (aiCreditsRemaining / (aiCreditsDailyLimit || 10)) * 100))}%` }}
                         />
                       </div>
+                      <p className="text-[11px] text-gray-400 dark:text-zinc-500 mt-2">
+                        Bugun sarflangan: <span className="font-semibold text-gray-700 dark:text-zinc-300">{aiCreditsUsedToday} kredit</span>
+                      </p>
                     </div>
+
                     <div className="bg-white dark:bg-zinc-900 p-5 rounded-xl border border-gray-200 dark:border-zinc-800 shadow-xs">
-                      <span className="text-xs font-bold text-gray-400 dark:text-zinc-500 uppercase tracking-wide block mb-1">
-                        {language === 'uz_lat' ? 'Hujjat va Eksportlar (Bugun)' : language === 'uz_cyr' ? 'Ҳужжат ва Экспортлар (Бугун)' : language === 'ru' ? 'Документы и Экспорт (Сегодня)' : 'Documents & Exports (Today)'}
-                      </span>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-bold text-gray-400 dark:text-zinc-500 uppercase tracking-wide">
+                          {language === 'uz_lat' ? 'Hujjat va Eksportlar (Bugun)' : language === 'uz_cyr' ? 'Ҳужжат ва Экспортлар (Бугун)' : language === 'ru' ? 'Документы и Экспорт (Сегодня)' : 'Documents & Exports (Today)'}
+                        </span>
+                        <Crown className="w-4 h-4 text-purple-500" />
+                      </div>
                       <span className="text-3xl font-black text-gray-900 dark:text-zinc-50">
                         {exportsToday} <span className="text-xs font-bold text-gray-400 dark:text-zinc-500">/ {subscriptionTier === "free" ? "3" : (language === 'uz_lat' ? 'Cheksiz' : language === 'uz_cyr' ? 'Чексиз' : language === 'ru' ? 'Безлимит' : 'Unlimited')}</span>
                       </span>
@@ -317,59 +367,62 @@ export function UserProfile({ user }: { user?: any }) {
                           style={{ width: `${subscriptionTier === "free" ? Math.min(100, (exportsToday / 3) * 100) : 100}%` }}
                         />
                       </div>
+                      <p className="text-[11px] text-gray-400 dark:text-zinc-500 mt-2">
+                        Tarif: <span className="font-semibold uppercase text-blue-600 dark:text-blue-400">{subscriptionTier}</span>
+                      </p>
                     </div>
                   </div>
                 </div>
 
-                {/* Custom API Key manager */}
-                <div className="p-6 rounded-2xl border border-blue-100/50 dark:border-blue-900/30 bg-blue-50/10 dark:bg-blue-950/10 hover:bg-blue-50/20 dark:hover:bg-blue-950/20 transition-all">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Key className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-                    <h3 className="font-bold text-gray-900 dark:text-zinc-200 text-sm sm:text-base">Shaxsiy Gemini API sozlamalari (Ixtiyoriy)</h3>
+                {/* Unified AI Gateway & Credit System Info Card (No API Key Required) */}
+                <div className="p-6 rounded-2xl border border-emerald-100 dark:border-emerald-900/30 bg-emerald-50/20 dark:bg-emerald-950/10">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                      <h3 className="font-bold text-gray-900 dark:text-zinc-200 text-sm sm:text-base">
+                        Markazlashgan Gemini AI Gateway
+                      </h3>
+                    </div>
+                    <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/50 px-2.5 py-0.5 rounded-full">
+                      Faol & Bepul
+                    </span>
                   </div>
-                  <p className="text-xs text-gray-500 dark:text-zinc-400 leading-relaxed mb-4">
-                    Tizimning bepul so'rovlar limiti tugagan taqdirda yoki o'zingizning shaxsiy resurslaringizdan cheksiz foydalanishni istasangiz, o'zingizning bepul Gemini API kalitingizni kiritib qo'ying. 
-                    Uni batamom bepul va 1 daqiqada olishingiz mumkin:{" "}
-                    <a 
-                      href="https://aistudio.google.com/app/apikey" 
-                      target="_blank" 
-                      rel="noopener noreferrer" 
-                      className="text-blue-600 dark:text-blue-400 font-semibold underline hover:text-blue-700"
-                    >
-                      Gemini API Kalitini Olish (bepul)
-                    </a>.
-                  </p>
                   
-                  <div className="relative">
-                    <input
-                      type={showKeyField ? "text" : "password"}
-                      value={customGeminiKey}
-                      onChange={(e) => setCustomGeminiKey(e.target.value)}
-                      placeholder="AIzaSy..."
-                      className="w-full pl-4 pr-20 py-2.5 border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all font-mono text-xs"
-                    />
-                    <div className="absolute inset-y-0 right-2 flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setShowKeyField(!showKeyField)}
-                        className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-zinc-200 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer"
-                        title={showKeyField ? "Kalitni yashirish" : "Kalitni ko'rsatish"}
-                      >
-                        {showKeyField ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                      {customGeminiKey && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setCustomGeminiKey("");
-                            localStorage.removeItem("custom_gemini_api_key");
-                          }}
-                          className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition-colors cursor-pointer"
-                          title="Kalitni o'chirish"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
+                  <p className="text-xs text-gray-600 dark:text-zinc-400 leading-relaxed mb-4">
+                    Dastyorchi barcha sun'iy intellekt so'rovlarini o'zining markazlashgan serverlari orqali amalga oshiradi. 
+                    Foydalanuvchilardan shaxsiy Gemini API kalit kiritish yoki sozlash talab etilmaydi. 
+                    Kreditlaringiz har kuni Toshkent vaqti bilan 00:00 da avtomatik tarzda to'ldiriladi.
+                  </p>
+
+                  <div className="bg-white dark:bg-zinc-900 rounded-xl p-3 border border-emerald-100 dark:border-emerald-900/40">
+                    <div className="text-[11px] font-semibold text-gray-500 dark:text-zinc-400 mb-2 uppercase tracking-wider">
+                      Amallar bo'yicha kredit sarfi:
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+                      <div className="flex items-center justify-between p-2 rounded-lg bg-gray-50 dark:bg-zinc-800/60">
+                        <span className="text-gray-700 dark:text-zinc-300">Yuridik maslahat</span>
+                        <span className="font-bold text-emerald-600 dark:text-emerald-400">1 kr</span>
+                      </div>
+                      <div className="flex items-center justify-between p-2 rounded-lg bg-gray-50 dark:bg-zinc-800/60">
+                        <span className="text-gray-700 dark:text-zinc-300">Mantiqiy xulosa</span>
+                        <span className="font-bold text-emerald-600 dark:text-emerald-400">2 kr</span>
+                      </div>
+                      <div className="flex items-center justify-between p-2 rounded-lg bg-gray-50 dark:bg-zinc-800/60">
+                        <span className="text-gray-700 dark:text-zinc-300">Hujjat yaratish</span>
+                        <span className="font-bold text-emerald-600 dark:text-emerald-400">3 kr</span>
+                      </div>
+                      <div className="flex items-center justify-between p-2 rounded-lg bg-gray-50 dark:bg-zinc-800/60">
+                        <span className="text-gray-700 dark:text-zinc-300">Fayl tahlili (PDF/Word)</span>
+                        <span className="font-bold text-emerald-600 dark:text-emerald-400">4 kr</span>
+                      </div>
+                      <div className="flex items-center justify-between p-2 rounded-lg bg-gray-50 dark:bg-zinc-800/60">
+                        <span className="text-gray-700 dark:text-zinc-300">Chuqur ekspertiza</span>
+                        <span className="font-bold text-emerald-600 dark:text-emerald-400">5 kr</span>
+                      </div>
+                      <div className="flex items-center justify-between p-2 rounded-lg bg-gray-50 dark:bg-zinc-800/60">
+                        <span className="text-gray-700 dark:text-zinc-300">Muvaffaqiyatsiz so'rov</span>
+                        <span className="font-bold text-blue-600 dark:text-blue-400">Qaytariladi</span>
+                      </div>
                     </div>
                   </div>
                 </div>

@@ -5,7 +5,8 @@ import {
   Users, Sparkles, Crown, Search, RefreshCw, Check,
   BarChart3, LayoutDashboard, Coins, TrendingUp, AlertCircle, 
   Phone, UserX, UserCheck, Trash2, Plus, Megaphone, X, Menu,
-  Layers, CheckCircle, Zap, ShieldCheck, Clock, AlertTriangle
+  Layers, CheckCircle, Zap, ShieldCheck, Clock, AlertTriangle,
+  Cpu, Server, Activity, ArrowUpRight
 } from "lucide-react";
 import { db, auth } from "../firebase";
 import { 
@@ -32,7 +33,7 @@ export function AdminPanel({ user }: { user?: any }) {
   const navigate = useNavigate();
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"dashboard" | "users" | "subscriptions" | "features" | "payments" | "notifications" | "errorMonitor">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "users" | "subscriptions" | "features" | "payments" | "notifications" | "errorMonitor" | "aiAnalytics">("dashboard");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   
   // Data State
@@ -42,6 +43,8 @@ export function AdminPanel({ user }: { user?: any }) {
   const [announcements, setAnnouncements] = useState<any[]>([]);
   const [planLimits, setPlanLimits] = useState<PlanLimits>(DEFAULT_PLAN_LIMITS);
   const [systemLogs, setSystemLogs] = useState<any[]>([]);
+  const [aiAnalytics, setAiAnalytics] = useState<any | null>(null);
+  const [loadingAiAnalytics, setLoadingAiAnalytics] = useState(false);
   
   // Loading flags
   const [loadingStats, setLoadingStats] = useState(false);
@@ -154,12 +157,45 @@ export function AdminPanel({ user }: { user?: any }) {
         console.error("Failed to sync system logs inside Admin Dashboard:", errLogs);
       }
 
+      // 7. Fetch AI Gateway Analytics
+      await fetchAiAnalytics();
+
     } catch (err) {
       console.error("Critical Admin sync error: ", err);
     } finally {
       setLoadingStats(false);
     }
   };
+
+  const fetchAiAnalytics = async () => {
+    setLoadingAiAnalytics(true);
+    try {
+      const sessionToken = localStorage.getItem("dastyorchi_session_token");
+      const headers: Record<string, string> = {};
+      if (sessionToken) headers["Authorization"] = `Bearer ${sessionToken}`;
+      if (auth.currentUser) {
+        try {
+          const idToken = await auth.currentUser.getIdToken();
+          headers["Authorization"] = `Bearer ${idToken}`;
+        } catch (e) {}
+      }
+      const res = await fetch("/api/admin/ai-analytics", { headers });
+      if (res.ok) {
+        const data = await res.json();
+        setAiAnalytics(data);
+      }
+    } catch (err) {
+      console.error("Failed to load AI analytics:", err);
+    } finally {
+      setLoadingAiAnalytics(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "aiAnalytics") {
+      fetchAiAnalytics();
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     const runVerification = async () => {
@@ -580,6 +616,16 @@ export function AdminPanel({ user }: { user?: any }) {
             </button>
 
             <button
+              onClick={() => { setActiveTab("aiAnalytics"); setMobileMenuOpen(false); }}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 text-xs font-bold rounded-xl transition-all ${
+                activeTab === "aiAnalytics" ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/40" : "text-slate-400 hover:bg-white/5 hover:text-white"
+              }`}
+            >
+              <Cpu className="w-4 h-4 text-emerald-400" />
+              <span>AI Gateway & Analitika</span>
+            </button>
+
+            <button
               onClick={() => { setActiveTab("payments"); setMobileMenuOpen(false); }}
               className={`w-full flex items-center gap-3 px-3 py-2.5 text-xs font-bold rounded-xl transition-all ${
                 activeTab === "payments" ? "bg-blue-600 text-white shadow-lg shadow-blue-600/40" : "text-slate-400 hover:bg-white/5 hover:text-white"
@@ -641,6 +687,7 @@ export function AdminPanel({ user }: { user?: any }) {
               {activeTab === "users" && "SaaS Foydalanuvchilari"}
               {activeTab === "subscriptions" && "Tarif Obunalari Konstruktori"}
               {activeTab === "features" && "Funksiyalar va Quvvat Matritsa"}
+              {activeTab === "aiAnalytics" && "Gemini AI Gateway & Kreditlar Analitikasi"}
               {activeTab === "payments" && "To'lovlar Ma'lumotnomasi"}
               {activeTab === "notifications" && "Broadcast E'lonlar Markazi"}
               {activeTab === "errorMonitor" && "System Audit & Xatoliklar Monitori"}
@@ -650,6 +697,7 @@ export function AdminPanel({ user }: { user?: any }) {
               {activeTab === "users" && "Mijozlarning ma'lumotlari, bugungi AI so'rovlari va bloklash sozlashlari."}
               {activeTab === "subscriptions" && "Dynamic narxlash, kvota sozlash va yangi obuna rejalari qo'shish."}
               {activeTab === "features" && "Tariflar kesimida premium AI tahlil modullarini ochish yoki yopish."}
+              {activeTab === "aiAnalytics" && "Markazlashgan AI so'rovlari, tokenlar hisobi, kreditlar sarfi va modellar dinamikasi."}
               {activeTab === "payments" && "Kutilayotgan kassa o'tkazmalari va tasdiqlash jurnali."}
               {activeTab === "notifications" && "Tizim e'lonlari, bildirishnomalari va ogohlantirishlarini tarqatish."}
               {activeTab === "errorMonitor" && "Tizim barqarorligi va ishlab chiqarishdagi kutilmagan istisnolar jurnali."}
@@ -1505,6 +1553,314 @@ export function AdminPanel({ user }: { user?: any }) {
                 {isSavingLimits ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                 Imkoniyatlar matoritsasini saqlash
               </button>
+            </div>
+
+          </div>
+        )}
+
+        {/* ============================== AI GATEWAY & ANALYTICS SUB PANEL ============================== */}
+        {activeTab === "aiAnalytics" && (
+          <div className="space-y-8 animate-fadeIn">
+            
+            {/* Header / Action Bar */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900 border border-white/10 p-5 rounded-3xl">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+                  <Cpu className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-white font-bold text-base flex items-center gap-2">
+                    Dastyorchi Centralized AI Gateway
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                      FAOL (PRODUCTION)
+                    </span>
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Server-authoritative kredit hisoblagichi, Gemini 2.5/3 modellar routingi va tokenlar statistikasi
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => fetchAiAnalytics()}
+                  disabled={loadingAiAnalytics}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer border border-white/5"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loadingAiAnalytics ? "animate-spin" : ""}`} />
+                  Yangilash
+                </button>
+              </div>
+            </div>
+
+            {/* 4 Core KPI Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+              
+              {/* Card 1: Requests */}
+              <div className="bg-slate-900 border border-white/10 p-5 rounded-3xl flex flex-col justify-between">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-400">Bugungi AI So'rovlar</span>
+                  <div className="p-2 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                    <Activity className="w-4 h-4" />
+                  </div>
+                </div>
+                <div className="mt-4">
+                  <span className="text-3xl font-black text-white font-mono">
+                    {aiAnalytics?.requestsToday ?? 0}
+                  </span>
+                  <span className="text-xs text-slate-400 ml-1.5 font-medium">ta</span>
+                </div>
+                <div className="mt-3 pt-3 border-t border-white/5 flex items-center justify-between text-[11px] text-slate-400">
+                  <span>Sana:</span>
+                  <span className="font-mono text-emerald-400 font-bold">{aiAnalytics?.date || "Bugun"}</span>
+                </div>
+              </div>
+
+              {/* Card 2: Credits Consumed */}
+              <div className="bg-slate-900 border border-white/10 p-5 rounded-3xl flex flex-col justify-between">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-400">Sarflangan AI Kreditlar</span>
+                  <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                    <Zap className="w-4 h-4" />
+                  </div>
+                </div>
+                <div className="mt-4">
+                  <span className="text-3xl font-black text-amber-400 font-mono">
+                    {aiAnalytics?.creditsConsumedToday ?? 0}
+                  </span>
+                  <span className="text-xs text-slate-400 ml-1.5 font-medium">kredit</span>
+                </div>
+                <div className="mt-3 pt-3 border-t border-white/5 flex items-center justify-between text-[11px] text-slate-400">
+                  <span>Operatsiyalar bo'yicha:</span>
+                  <span className="text-slate-300 font-medium">1 - 5 kr / so'rov</span>
+                </div>
+              </div>
+
+              {/* Card 3: Gemini Tokens */}
+              <div className="bg-slate-900 border border-white/10 p-5 rounded-3xl flex flex-col justify-between">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-400">Jami Gemini Tokenlar</span>
+                  <div className="p-2 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                    <BarChart3 className="w-4 h-4" />
+                  </div>
+                </div>
+                <div className="mt-4">
+                  <span className="text-2xl font-black text-white font-mono">
+                    {(((aiAnalytics?.totalInputTokensToday || 0) + (aiAnalytics?.totalOutputTokensToday || 0))).toLocaleString()}
+                  </span>
+                </div>
+                <div className="mt-3 pt-3 border-t border-white/5 flex items-center justify-between text-[10px] text-slate-400">
+                  <span>In: <strong className="text-slate-300 font-mono">{(aiAnalytics?.totalInputTokensToday || 0).toLocaleString()}</strong></span>
+                  <span>Out: <strong className="text-slate-300 font-mono">{(aiAnalytics?.totalOutputTokensToday || 0).toLocaleString()}</strong></span>
+                </div>
+              </div>
+
+              {/* Card 4: System Safety & Refunds */}
+              <div className="bg-slate-900 border border-white/10 p-5 rounded-3xl flex flex-col justify-between">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-400">Ishonchlilik & Qaytarish</span>
+                  <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    <ShieldCheck className="w-4 h-4" />
+                  </div>
+                </div>
+                <div className="mt-4 flex items-baseline gap-3">
+                  <div>
+                    <span className="text-xs text-slate-400">Xato: </span>
+                    <span className="text-lg font-bold text-rose-400 font-mono">{aiAnalytics?.failedRequests ?? 0}</span>
+                  </div>
+                  <div>
+                    <span className="text-xs text-slate-400">Qaytarilgan: </span>
+                    <span className="text-lg font-bold text-emerald-400 font-mono">{aiAnalytics?.refundedRequests ?? 0}</span>
+                  </div>
+                </div>
+                <div className="mt-3 pt-3 border-t border-white/5 flex items-center justify-between text-[11px] text-slate-400">
+                  <span>Avto-refund:</span>
+                  <span className="text-emerald-400 font-bold">Yoqilgan</span>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Middle Section: Operation Breakdown & Model Routing Info */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              
+              {/* Left 2 Cols: Operation Breakdown */}
+              <div className="lg:col-span-2 bg-slate-900 border border-white/10 p-6 rounded-3xl space-y-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-white font-extrabold text-sm flex items-center gap-2">
+                      <Layers className="w-4 h-4 text-blue-400" />
+                      Operatsiyalar Turi Kesimida So'rovlar Taqsimoti
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Foydalanuvchilar qaysi AI xizmatlaridan ko'proq foydalanishmoqda
+                    </p>
+                  </div>
+                  <span className="text-xs text-slate-500 font-mono">
+                    Jami: {aiAnalytics?.requestsToday ?? 0}
+                  </span>
+                </div>
+
+                {/* Operations List */}
+                <div className="space-y-4 pt-2">
+                  {[
+                    { id: "chat", name: "Yuridik Maslahat (Chat)", cost: 1, color: "bg-blue-500", desc: "Tezkor javoblar va birlamchi yo'naltirish" },
+                    { id: "reasoning", name: "Mantiqiy Xulosa (Reasoning)", cost: 2, color: "bg-indigo-500", desc: "Qonun normalarini solishtirish va tahlil qilish" },
+                    { id: "document", name: "Hujjat Yaratish (Document)", cost: 3, color: "bg-emerald-500", desc: "Sud arizalari, shartnomalar va da'volar generatsiyasi" },
+                    { id: "file_analysis", name: "Fayl & Hujjat Tahlili (File Analysis)", cost: 4, color: "bg-amber-500", desc: "Yuklangan PDF/DOCX fayllar tahlili va ekspertizasi" },
+                    { id: "deep_analysis", name: "Chuqur Yuridik Ekspertiza (Deep Analysis)", cost: 5, color: "bg-purple-500", desc: "To'liq modellashtirish va strategik yuridik xulosalar" },
+                  ].map((op) => {
+                    const count = aiAnalytics?.operationBreakdown?.[op.id] || 0;
+                    const total = aiAnalytics?.requestsToday || 1;
+                    const pct = Math.round((count / total) * 100);
+
+                    return (
+                      <div key={op.id} className="p-3 bg-slate-950/60 border border-white/5 rounded-2xl space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-2 font-bold text-white">
+                            <span>{op.name}</span>
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-amber-400 border border-amber-500/20">
+                              {op.cost} kr / so'rov
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 font-mono">
+                            <span className="text-slate-300 font-bold">{count} ta</span>
+                            <span className="text-slate-500">({pct}%)</span>
+                          </div>
+                        </div>
+
+                        {/* Progress Bar */}
+                        <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all duration-500 ${op.color}`}
+                            style={{ width: `${Math.max(count > 0 ? 3 : 0, pct)}%` }}
+                          />
+                        </div>
+
+                        <p className="text-[11px] text-slate-500">
+                          {op.desc}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Right 1 Col: Model Routing & System Config */}
+              <div className="bg-slate-900 border border-white/10 p-6 rounded-3xl space-y-5 flex flex-col justify-between">
+                <div>
+                  <h3 className="text-white font-extrabold text-sm flex items-center gap-2">
+                    <Server className="w-4 h-4 text-emerald-400" />
+                    Model Routing & Sozlamalar
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Operatsiyaga qarab Gemini modellariga avtomatik yo'naltirish
+                  </p>
+
+                  <div className="space-y-3 mt-4">
+                    {/* Fast Model */}
+                    <div className="p-3.5 bg-slate-950 border border-white/5 rounded-2xl space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-emerald-400">Tezkor Model (Fast)</span>
+                        <span className="text-[10px] bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full font-mono font-bold">
+                          Default
+                        </span>
+                      </div>
+                      <p className="text-xs font-mono font-bold text-white">gemini-3.8-flash</p>
+                      <p className="text-[11px] text-slate-400">Chat va oddiy savol-javoblar uchun minimal kutish vaqti bilan ishlaydi.</p>
+                    </div>
+
+                    {/* Strong Model */}
+                    <div className="p-3.5 bg-slate-950 border border-white/5 rounded-2xl space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-purple-400">Kengaytirilgan Model (Strong)</span>
+                        <span className="text-[10px] bg-purple-500/10 text-purple-400 px-2 py-0.5 rounded-full font-mono font-bold">
+                          Pro / Legal
+                        </span>
+                      </div>
+                      <p className="text-xs font-mono font-bold text-white">gemini-3.1-pro-preview</p>
+                      <p className="text-[11px] text-slate-400">Hujjat generatsiyasi, reasoning va chuqur tahlillar uchun yuqori mantiqiy aniqlik.</p>
+                    </div>
+
+                    {/* Centralized Key Security */}
+                    <div className="p-3.5 bg-emerald-950/20 border border-emerald-500/20 rounded-2xl space-y-1">
+                      <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        Xavfsizlik Siyosati
+                      </span>
+                      <p className="text-[11px] text-slate-300 leading-relaxed">
+                        API kalit faqat server muhitida (<code className="text-emerald-300 font-mono">GEMINI_API_KEY</code>) saqlanadi. Foydalanuvchilardan API kalit so'rash qat'iyan taqiqlangan va olib tashlangan.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-slate-950 border border-white/5 rounded-2xl text-[11px] text-slate-400 flex items-center justify-between">
+                  <span>Kunlik hisob yangilanishi:</span>
+                  <span className="font-bold text-slate-200 font-mono">00:00 (Asia/Tashkent)</span>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Bottom Section: Top Users Consuming Credits Today */}
+            <div className="bg-slate-900 border border-white/10 p-6 rounded-3xl space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-white font-extrabold text-sm flex items-center gap-2">
+                    <Users className="w-4 h-4 text-amber-400" />
+                    Bugungi Eng Faol AI Foydalanuvchilari (Top Consumers)
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Kun davomida eng ko'p kredit sarflagan Telegram mijozlari
+                  </p>
+                </div>
+                <span className="text-xs text-slate-500">
+                  {aiAnalytics?.topUsers?.length || 0} ta faol foydalanuvchi
+                </span>
+              </div>
+
+              {aiAnalytics?.topUsers && aiAnalytics.topUsers.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-white/5 text-slate-400 font-semibold">
+                        <th className="pb-3 px-3">#</th>
+                        <th className="pb-3 px-3">Foydalanuvchi ID</th>
+                        <th className="pb-3 px-3">Sarflangan Kreditlar</th>
+                        <th className="pb-3 px-3">Tizim Holati</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {aiAnalytics.topUsers.map((u: any, idx: number) => (
+                        <tr key={u.userId || idx} className="hover:bg-white/5 transition-colors">
+                          <td className="py-3 px-3 font-mono text-slate-500">{idx + 1}</td>
+                          <td className="py-3 px-3 font-mono font-bold text-white flex items-center gap-2">
+                            <span>{u.userId}</span>
+                            {u.userId.startsWith("tg_") && (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-500/10 text-blue-400">
+                                Telegram
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 font-mono font-black text-amber-400">
+                            {u.credits} kredit
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                              Faol
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="py-12 text-center text-slate-500 text-xs border border-dashed border-white/5 rounded-2xl">
+                  Bugun hozircha AI kreditlari sarflanmagan yoki so'rovlar qayd etilmagan.
+                </div>
+              )}
             </div>
 
           </div>

@@ -8,6 +8,22 @@ import { getFirestore } from "firebase-admin/firestore";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import {
+  AIOperation,
+  AI_CREDIT_COSTS,
+  DEFAULT_TIER_LIMITS,
+  getTashkentDateString,
+  resolveModel,
+  validateOperation,
+  acquireUserLock,
+  releaseUserLock,
+  reserveCredits,
+  finalizeAiUsage,
+  refundAiUsage,
+  getUserCreditStatus,
+  getAiAnalytics,
+  ReservationResult
+} from "./aiGateway";
 
 dotenv.config();
 
@@ -201,6 +217,7 @@ function verifySessionToken(token: string): { valid: boolean; payload?: any; err
 }
 
 async function upgradeUserSubscription(userId: string, tier: "pro" | "business", provider: string, amount: number) {
+  const newLimit = tier === "pro" ? 100 : 300;
   if (!dbAdmin) {
     console.warn(`[SubscriptionUpgrade] dbAdmin unavailable. Cannot persist upgrade for user: ${userId}`);
     return;
@@ -211,12 +228,49 @@ async function upgradeUserSubscription(userId: string, tier: "pro" | "business",
       subscriptionTier: tier,
       subscriptionStatus: "active",
       requestsToday: 0,
+      aiCreditsDailyLimit: newLimit,
+      aiCreditsRemaining: newLimit,
+      aiCreditsUsedToday: 0,
       updatedAt: new Date().toISOString()
     });
-    console.log(`[SubscriptionUpgrade] Successfully upgraded user: ${userId} to ${tier} tier via ${provider}`);
+    console.log(`[SubscriptionUpgrade] Successfully upgraded user: ${userId} to ${tier} tier (${newLimit} credits/day) via ${provider}`);
   } catch (err: any) {
     console.error(`[SubscriptionUpgrade] Error updating user ${userId}:`, err.message);
   }
+}
+
+/**
+ * Authenticates user from Authorization header (Session token or Firebase ID token).
+ * Falls back to dev request body in non-production environments.
+ */
+async function authenticateRequestUser(req: express.Request): Promise<string | null> {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.substring(7) : authHeader;
+
+  if (token) {
+    // 1. Try our HMAC-SHA256 session token
+    const verified = verifySessionToken(token);
+    if (verified.valid && verified.payload?.uid) {
+      return verified.payload.uid;
+    }
+
+    // 2. Try Firebase ID Token if admin is available
+    if (admin.apps.length > 0) {
+      try {
+        const decoded = await admin.auth().verifyIdToken(token);
+        if (decoded && decoded.uid) {
+          return decoded.uid;
+        }
+      } catch (e) {}
+    }
+  }
+
+  // 3. Fallback in dev mode for testing convenience
+  if (process.env.NODE_ENV !== "production" && req.body?.userId) {
+    return req.body.userId;
+  }
+
+  return null;
 }
 
 // ==========================================
@@ -366,6 +420,14 @@ apiRouter.post("/auth/telegram", async (req, res) => {
         subscriptionStatus: "active",
         requestsToday: 0,
         exportsToday: 0,
+        aiCreditsDailyLimit: 10,
+        aiCreditsUsedToday: 0,
+        aiCreditsRemaining: 10,
+        aiCreditResetDate: getTashkentDateString(),
+        lifetimeAiCreditsUsed: 0,
+        totalGeminiInputTokens: 0,
+        totalGeminiOutputTokens: 0,
+        lastAiRequestAt: new Date().toISOString(),
         lastRequestResetDate: new Date().toLocaleDateString("en-CA"),
         lastExportResetDate: new Date().toLocaleDateString("en-CA"),
         createdAt: new Date().toISOString(),
@@ -397,6 +459,20 @@ apiRouter.post("/auth/telegram", async (req, res) => {
         updatedFields.role = "admin";
         userProfile.role = "admin";
       }
+
+      // Auto-migrate AI credits if missing
+      if (userProfile.aiCreditsDailyLimit === undefined) {
+        const tier = userProfile.subscriptionTier || "free";
+        const limit = DEFAULT_TIER_LIMITS[tier] || 10;
+        updatedFields.aiCreditsDailyLimit = limit;
+        updatedFields.aiCreditsUsedToday = 0;
+        updatedFields.aiCreditsRemaining = limit;
+        updatedFields.aiCreditResetDate = getTashkentDateString();
+        updatedFields.lifetimeAiCreditsUsed = 0;
+        updatedFields.totalGeminiInputTokens = 0;
+        updatedFields.totalGeminiOutputTokens = 0;
+      }
+
       userProfile = { ...userProfile, ...updatedFields };
 
       if (dbAdmin) {
@@ -555,6 +631,14 @@ apiRouter.post("/auth/dev-login", async (req, res) => {
         subscriptionStatus: "active",
         requestsToday: 0,
         exportsToday: 0,
+        aiCreditsDailyLimit: 100,
+        aiCreditsUsedToday: 0,
+        aiCreditsRemaining: 100,
+        aiCreditResetDate: getTashkentDateString(),
+        lifetimeAiCreditsUsed: 0,
+        totalGeminiInputTokens: 0,
+        totalGeminiOutputTokens: 0,
+        lastAiRequestAt: new Date().toISOString(),
         lastRequestResetDate: new Date().toLocaleDateString("en-CA"),
         lastExportResetDate: new Date().toLocaleDateString("en-CA"),
         createdAt: new Date().toISOString(),
@@ -601,66 +685,202 @@ apiRouter.post("/auth/dev-login", async (req, res) => {
 });
 
 // ------------------------------------------
-// POST /ai
+// GET /ai/credits
+// ------------------------------------------
+apiRouter.get("/ai/credits", async (req, res) => {
+  try {
+    const userId = await authenticateRequestUser(req);
+    if (!userId) {
+      return res.status(401).json({
+        error: "Sessiya topilmadi yoki eskirgan. Iltimos, tizimga kiring.",
+        code: "UNAUTHORIZED"
+      });
+    }
+    const status = await getUserCreditStatus(dbAdmin, userId);
+    return res.json(status);
+  } catch (err: any) {
+    return res.status(500).json({
+      error: "Kreditlarni olishda xatolik: " + err.message,
+      code: "CREDIT_FETCH_ERROR"
+    });
+  }
+});
+
+// ------------------------------------------
+// GET /admin/ai-analytics
+// ------------------------------------------
+apiRouter.get("/admin/ai-analytics", async (req, res) => {
+  try {
+    const userId = await authenticateRequestUser(req);
+    if (!userId) {
+      return res.status(401).json({ error: "Ruxsat etilmagan", code: "UNAUTHORIZED" });
+    }
+
+    let isAdmin = false;
+    if (dbAdmin) {
+      const userDoc = await dbAdmin.collection("users").doc(userId).get();
+      if (userDoc.exists && userDoc.data()?.role === "admin") {
+        isAdmin = true;
+      }
+    } else {
+      isAdmin = true; // Dev fallback
+    }
+
+    if (!isAdmin) {
+      return res.status(403).json({ error: "Faqat administratorlar uchun", code: "FORBIDDEN" });
+    }
+
+    const analytics = await getAiAnalytics(dbAdmin);
+    return res.json(analytics);
+  } catch (err: any) {
+    return res.status(500).json({ error: "Analitika xatoligi: " + err.message });
+  }
+});
+
+// ------------------------------------------
+// POST /ai - Centralized Production AI Gateway
 // ------------------------------------------
 apiRouter.post("/ai", async (req, res) => {
-  let apiKey = "";
+  const userId = await authenticateRequestUser(req);
+  if (!userId) {
+    return res.status(401).json({
+      error: "Iltimos, tizimga qayta kiring (Sessiya topilmadi yoki eskirgan).",
+      code: "UNAUTHORIZED"
+    });
+  }
+
+  // Check concurrency lock
+  if (!acquireUserLock(userId)) {
+    return res.status(429).json({
+      error: "Oldingi so'rovingiz hali bajarilmoqda. Iltimos, uning yakunlanishini kuting.",
+      code: "CONCURRENT_REQUEST"
+    });
+  }
+
+  const { contents, systemInstruction, config, model } = req.body || {};
+  const operation: AIOperation = validateOperation(req.body?.operation);
+  const targetModel = resolveModel(operation, model);
+  const creditCost = AI_CREDIT_COSTS[operation] || 1;
+
+  let reservation: ReservationResult | null = null;
+
   try {
-    const { contents, systemInstruction, config, model, customApiKey } = req.body || {};
-    
-    apiKey = customApiKey?.trim() || process.env.GEMINI_API_KEY?.trim() || "";
-    if (!apiKey || apiKey === "MY_GEMINI_API_KEY" || apiKey === "your_real_key_here") {
-      return res.status(401).json({
-        error: "GEMINI_API_KEY sozlanmagan. Iltimos, server muhitida GEMINI_API_KEY o'zgaruvchisini sozlang."
+    // 1. Atomically reserve credits via Firestore transaction (or memory fallback)
+    reservation = await reserveCredits(dbAdmin, userId, operation, targetModel);
+    if (!reservation.allowed) {
+      return res.status(429).json({
+        error: reservation.error || "Bugungi bepul AI limitingiz tugadi. AI kreditlaringiz ertaga yangilanadi.",
+        code: reservation.code || "AI_CREDIT_LIMIT",
+        creditsRemaining: reservation.creditsRemaining,
+        creditsDailyLimit: reservation.creditsDailyLimit,
+        resetDate: reservation.resetDate
       });
     }
 
-    const genAI = new GoogleGenAI({ 
+    // 2. Server-side authoritative GEMINI_API_KEY
+    const apiKey = process.env.GEMINI_API_KEY?.trim() || "";
+    if (!apiKey || apiKey === "MY_GEMINI_API_KEY" || apiKey === "your_real_key_here") {
+      await refundAiUsage(dbAdmin, reservation.requestId, userId, creditCost, "Server GEMINI_API_KEY missing");
+      return res.status(500).json({
+        error: "Serverda Gemini API sozlanmagan. Iltimos, administratorga murojaat qiling.",
+        code: "SERVER_CONFIG_ERROR",
+        refunded: true
+      });
+    }
+
+    // 3. Call Gemini API
+    const genAI = new GoogleGenAI({
       apiKey,
       httpOptions: {
         headers: {
-          "User-Agent": "aistudio-build"
+          "User-Agent": "dastyorchi-ai-gateway"
         }
       }
     });
 
     const result = await genAI.models.generateContent({
-      model: model || "gemini-3.5-flash",
+      model: targetModel,
       contents,
       config: {
         ...config,
+        maxOutputTokens: 8192,
         systemInstruction
       }
     });
 
     const text = result.text;
-    return res.json({ text });
+    if (!text || typeof text !== "string") {
+      throw new Error("Provider returned empty response");
+    }
+
+    // 4. Token accounting from response usageMetadata
+    const usageMetadata = (result as any).usageMetadata || {};
+    const inputTokens = usageMetadata.promptTokenCount || 0;
+    const outputTokens = usageMetadata.candidatesTokenCount || 0;
+    const totalTokens = usageMetadata.totalTokenCount || (inputTokens + outputTokens);
+
+    // 5. Finalize usage in ledger & increment user token counters
+    await finalizeAiUsage(dbAdmin, reservation.requestId, userId, {
+      inputTokens,
+      outputTokens,
+      totalTokens
+    });
+
+    return res.json({
+      text,
+      creditsRemaining: reservation.creditsRemaining,
+      creditsDailyLimit: reservation.creditsDailyLimit,
+      creditsUsedToday: reservation.creditsUsedToday,
+      creditCost,
+      requestId: reservation.requestId,
+      model: targetModel
+    });
   } catch (error: any) {
-    console.error("AI Server Error:", error);
-    const errorMessage = typeof error === "object" ? JSON.stringify(error) + " " + (error.message || "") : String(error);
+    console.error(`[AI Gateway] Error processing request for user ${userId}:`, error.message || error);
+
+    // Idempotent refund on failure
+    if (reservation && reservation.allowed) {
+      try {
+        await refundAiUsage(dbAdmin, reservation.requestId, userId, creditCost, error.message || String(error));
+      } catch (refundErr: any) {
+        console.error("[AI Gateway] Error in refund:", refundErr.message);
+      }
+    }
+
+    const errorMessage = typeof error === "object" ? (error.message || JSON.stringify(error)) : String(error);
     const errLower = errorMessage.toLowerCase();
-    
+
     let status = 500;
     let errorCode = "SERVER_ERROR";
+    let friendlyMessage = "AI xizmatida vaqtinchalik nosozlik yuz berdi. Kreditlaringiz hisobingizga qaytarildi. Iltimos, qayta urinib ko'ring.";
 
     if (errLower.includes("api_key_invalid") || errLower.includes("api key not valid")) {
-      status = 401;
-      errorCode = "AUTH_ERROR";
+      status = 500;
+      errorCode = "AUTH_CONFIG_ERROR";
+      friendlyMessage = "Server konfiguratsiyasida xatolik. AI kreditlaringiz qaytarildi.";
     } else if (errLower.includes("429") || errLower.includes("quota") || errLower.includes("resource_exhausted")) {
       status = 429;
-      errorCode = "AI_QUOTA_LIMIT";
-    } else if (errLower.includes("413") || errLower.includes("payload") || errLower.includes("request size exceeded") || errLower.includes("body too large")) {
+      errorCode = "PROVIDER_RATE_LIMIT";
+      friendlyMessage = "Google AI serverlarida vaqtinchalik yuqori yuklama (Rate Limit). Kreditlaringiz qaytarildi, iltimos birozdan so'ng qayta urinib ko'ring.";
+    } else if (errLower.includes("413") || errLower.includes("payload") || errLower.includes("body too large")) {
       status = 413;
       errorCode = "PAYLOAD_TOO_LARGE";
+      friendlyMessage = "Yuborilgan fayl yoki matn hajmi juda katta. Kreditlaringiz qaytarildi.";
     } else if (errLower.includes("context_length_exceeded") || errLower.includes("context overflow")) {
       status = 400;
       errorCode = "CONTEXT_OVERFLOW";
-    } else if (errLower.includes("503") || errLower.includes("unavailable") || errLower.includes("overloaded") || errLower.includes("high demand")) {
-      status = 503;
-      errorCode = "SERVER_ERROR";
+      friendlyMessage = "Suhbat tarixi yoki hujjat hajmi model chegarasidan oshib ketdi. Kreditlaringiz qaytarildi.";
     }
 
-    return res.status(status).json({ error: errorMessage, code: errorCode, original_status: status });
+    return res.status(status).json({
+      error: friendlyMessage,
+      code: errorCode,
+      refunded: true,
+      creditsRemaining: reservation ? (reservation.creditsRemaining + creditCost) : undefined,
+      creditsDailyLimit: reservation?.creditsDailyLimit
+    });
+  } finally {
+    releaseUserLock(userId);
   }
 });
 

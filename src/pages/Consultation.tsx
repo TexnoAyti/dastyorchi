@@ -3,7 +3,7 @@ import { extractRawText } from "mammoth";
 import { motion } from "framer-motion";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { signOut } from "firebase/auth";
-import { Send, Bot, User, Scale, AlertCircle, Mic, MicOff, FileText, Download, TrendingUp, X, Plus, MessageSquare, Paperclip, ListChecks, Ghost, Briefcase, ChevronDown, CheckCircle, Lock, AlertTriangle, LogOut, Settings, LayoutDashboard, Crown, Volume2, VolumeX, Bell, History } from "lucide-react";
+import { Send, Bot, User, Scale, AlertCircle, Mic, MicOff, FileText, Download, TrendingUp, X, Plus, MessageSquare, Paperclip, ListChecks, Ghost, Briefcase, ChevronDown, CheckCircle, Lock, AlertTriangle, LogOut, Settings, LayoutDashboard, Crown, Volume2, VolumeX, Bell, History, Zap } from "lucide-react";
 import html2pdf from "html2pdf.js";
 import { chatWithLawyer, generateHTMLDocument, generateChatTitle } from "../services/aiService";
 import { Language, RiskAnalysis, Case, PersonProfile, ChatSession, ChatMessage } from "../types";
@@ -678,6 +678,8 @@ export function Consultation({ user }: { user: any }) {
 
   const [userTier, setUserTier] = useState<"free" | "pro" | "business">("free");
   const [requestsCountToday, setRequestsCountToday] = useState(0);
+  const [creditsRemaining, setCreditsRemaining] = useState<number>(user?.aiCreditsRemaining ?? 10);
+  const [creditsDailyLimit, setCreditsDailyLimit] = useState<number>(user?.aiCreditsDailyLimit ?? 10);
 
   useEffect(() => {
     if (user) {
@@ -687,8 +689,21 @@ export function Consultation({ user }: { user: any }) {
         setUserTier(user.subscriptionTier || "free");
       }
       setRequestsCountToday(user.requestsToday || 0);
+      if (typeof user.aiCreditsRemaining === "number") setCreditsRemaining(user.aiCreditsRemaining);
+      if (typeof user.aiCreditsDailyLimit === "number") setCreditsDailyLimit(user.aiCreditsDailyLimit);
     }
   }, [user]);
+
+  useEffect(() => {
+    const handleCreditsUpdate = (e: any) => {
+      if (e.detail) {
+        if (typeof e.detail.creditsRemaining === "number") setCreditsRemaining(e.detail.creditsRemaining);
+        if (typeof e.detail.creditsDailyLimit === "number") setCreditsDailyLimit(e.detail.creditsDailyLimit);
+      }
+    };
+    window.addEventListener("ai-credits-updated", handleCreditsUpdate);
+    return () => window.removeEventListener("ai-credits-updated", handleCreditsUpdate);
+  }, []);
 
   const [isPrivateMode, setIsPrivateMode] = useState(false);
   const [isBusinessMode, setIsBusinessMode] = useState(false);
@@ -1380,17 +1395,20 @@ export function Consultation({ user }: { user: any }) {
             {/* Daily Usage Telemetry Bar */}
             <div className="border-t border-white/20 pt-2 text-left">
               <div className="flex justify-between items-center text-[9px] text-gray-500 font-bold uppercase tracking-wider">
-                <span>{lt.limits}</span>
-                <span className="text-[8px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded-full">{userTier.toUpperCase()}</span>
+                <span>AI KREDITLAR</span>
+                <span className="text-[8px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded-full font-bold">{userTier.toUpperCase()}</span>
               </div>
               <div className="mt-1 flex items-center justify-between text-[11px] font-bold text-gray-700">
-                <span>{lt.ai_queries}:</span>
-                <span>{requestsCountToday} / {userTier === "free" ? "10" : lt.unlimited}</span>
+                <span className="flex items-center gap-1">
+                  <Zap className="w-3 h-3 text-amber-500 fill-amber-500" />
+                  Qoldiq:
+                </span>
+                <span>{creditsRemaining} / {creditsDailyLimit} kr</span>
               </div>
               <div className="w-full bg-gray-200/50 h-1.5 rounded-full mt-1 overflow-hidden">
                 <div 
-                  className="bg-blue-600 h-full rounded-full transition-all duration-500" 
-                  style={{ width: `${userTier === "free" ? Math.min(100, (requestsCountToday / 10) * 100) : 100}%` }}
+                  className={`h-full rounded-full transition-all duration-500 ${creditsRemaining <= 2 ? 'bg-amber-500' : 'bg-blue-600'}`} 
+                  style={{ width: `${Math.min(100, Math.max(0, (creditsRemaining / (creditsDailyLimit || 10)) * 100))}%` }}
                 />
               </div>
             </div>
@@ -1568,13 +1586,16 @@ export function Consultation({ user }: { user: any }) {
             {/* Drawer Footer info */}
             <div className="pt-3 border-t border-gray-200/50 text-[11px] text-gray-500 font-medium">
               <div className="flex justify-between items-center mb-1">
-                <span>{lt.limits}:</span>
-                <span className="font-bold text-gray-800">{requestsCountToday} / {userTier === "free" ? "10" : lt.unlimited}</span>
+                <span className="flex items-center gap-1 font-bold">
+                  <Zap className="w-3 h-3 text-amber-500 fill-amber-500" />
+                  AI Kreditlar:
+                </span>
+                <span className="font-bold text-gray-800">{creditsRemaining} / {creditsDailyLimit} kr</span>
               </div>
               <div className="w-full bg-gray-200 h-1.5 rounded-full overflow-hidden">
                 <div 
-                  className="bg-blue-600 h-full rounded-full" 
-                  style={{ width: `${userTier === "free" ? Math.min(100, (requestsCountToday / 10) * 100) : 100}%` }}
+                  className={`h-full transition-all duration-500 ${creditsRemaining <= 2 ? 'bg-amber-500' : 'bg-blue-600'}`} 
+                  style={{ width: `${Math.min(100, Math.max(0, (creditsRemaining / (creditsDailyLimit || 10)) * 100))}%` }}
                 />
               </div>
             </div>

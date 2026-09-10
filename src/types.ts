@@ -1,5 +1,42 @@
 export type Language = "uz_lat" | "uz_cyr" | "ru" | "en";
 
+export type AIOperationType = 
+  | "chat" 
+  | "reasoning" 
+  | "document" 
+  | "file_analysis" 
+  | "deep_analysis";
+
+export const AI_CREDIT_COSTS: Record<AIOperationType, number> = {
+  chat: 1,
+  reasoning: 2,
+  document: 3,
+  file_analysis: 4,
+  deep_analysis: 5
+};
+
+export const DEFAULT_TIER_LIMITS: Record<"free" | "pro" | "business", number> = {
+  free: 10,
+  pro: 100,
+  business: 300
+};
+
+export interface AIUsageLedgerEntry {
+  requestId: string;
+  userId: string;
+  operation: AIOperationType;
+  creditCost: number;
+  status: "RESERVED" | "COMPLETED" | "REFUNDED" | "FAILED";
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  createdAt: string;
+  completedAt?: string | null;
+  refundedAt?: string | null;
+  error?: string | null;
+}
+
 export interface User {
   uid: string;
   id?: string;
@@ -14,6 +51,14 @@ export interface User {
   subscriptionStatus?: "active" | "expired" | "canceled";
   requestsToday?: number;
   exportsToday?: number;
+  aiCreditsDailyLimit?: number;
+  aiCreditsUsedToday?: number;
+  aiCreditsRemaining?: number;
+  aiCreditResetDate?: string;
+  lifetimeAiCreditsUsed?: number;
+  totalGeminiInputTokens?: number;
+  totalGeminiOutputTokens?: number;
+  lastAiRequestAt?: any;
   signatureDataUrl?: string;
   avatarUrl?: string;
   photoUrl?: string;
