@@ -5,6 +5,7 @@ import { db, auth } from "../firebase";
 import { User, Mail, CreditCard, Check, Loader2, Camera, Crown, Sparkles, Save, Globe, Zap, ShieldCheck, Cpu, AlertCircle, Lock } from "lucide-react";
 import { motion } from "framer-motion";
 import { useLanguage } from "../contexts/LanguageContext";
+import { getApiAuthorizationHeader } from "../services/apiAuth";
 
 const AVATAR_PRESETS = [
   { id: "felix", name: "Felix", url: "https://api.dicebear.com/7.x/adventurer/svg?seed=Felix" },
@@ -54,9 +55,7 @@ export function UserProfile({ user }: { user?: any }) {
   useEffect(() => {
     const fetchCredits = async () => {
       try {
-        const sessionToken = localStorage.getItem("dastyorchi_session_token");
-        const headers: Record<string, string> = {};
-        if (sessionToken) headers["Authorization"] = `Bearer ${sessionToken}`;
+        const headers = await getApiAuthorizationHeader();
         const res = await fetch("/api/ai/credits", { headers });
         if (res.ok) {
           const data = await res.json();

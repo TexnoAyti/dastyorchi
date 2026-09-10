@@ -17,6 +17,7 @@ import {
 import { 
   getPlanLimits, savePlanLimits, PlanLimits, DEFAULT_PLAN_LIMITS, SubscriptionTier 
 } from "../services/subscriptionService";
+import { getApiAuthorizationHeader } from "../services/apiAuth";
 
 interface Plan {
   id: string;
@@ -170,15 +171,7 @@ export function AdminPanel({ user }: { user?: any }) {
   const fetchAiAnalytics = async () => {
     setLoadingAiAnalytics(true);
     try {
-      const sessionToken = localStorage.getItem("dastyorchi_session_token");
-      const headers: Record<string, string> = {};
-      if (sessionToken) headers["Authorization"] = `Bearer ${sessionToken}`;
-      if (auth.currentUser) {
-        try {
-          const idToken = await auth.currentUser.getIdToken();
-          headers["Authorization"] = `Bearer ${idToken}`;
-        } catch (e) {}
-      }
+      const headers = await getApiAuthorizationHeader();
       const res = await fetch("/api/admin/ai-analytics", { headers });
       if (res.ok) {
         const data = await res.json();

@@ -3,6 +3,7 @@ import { LEGAL_LIBRARY } from "../data/legalLibrary";
 import { LegalService } from "./legalService";
 import { pipelineTracker } from "../utils/pipelineTracker";
 import { auth } from "../firebase";
+import { getApiAuthorizationHeader, silentTelegramReauth } from "./apiAuth";
 
 const SYSTEM_INSTRUCTION = `You are an elite legal AI assistant for Uzbekistan.
 
@@ -52,11 +53,13 @@ LANGUAGE STYLE
 
 export class AIServerError extends Error {
   status: number;
+  code?: string;
   errorData: any;
   constructor(message: string, status: number, errorData?: any) {
     super(message);
     this.name = "AIServerError";
     this.status = status;
+    this.code = errorData?.code;
     this.errorData = errorData;
     Object.setPrototypeOf(this, AIServerError.prototype);
   }
@@ -89,26 +92,16 @@ export async function callAIServer(params: {
   const retryDelays = [2000, 5000];
   let currentModel = params.model;
   const operation = params.operation || "chat";
-
-  // Get session token or Firebase auth ID token
-  const sessionToken = localStorage.getItem("dastyorchi_session_token");
-  let idToken: string | null = null;
-  try {
-    if (auth.currentUser) {
-      idToken = await auth.currentUser.getIdToken();
-    }
-  } catch (e) {}
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json"
-  };
-  if (sessionToken) {
-    headers["Authorization"] = `Bearer ${sessionToken}`;
-  } else if (idToken) {
-    headers["Authorization"] = `Bearer ${idToken}`;
-  }
+  let hasAttemptedReauth = false;
 
   while (true) {
+    // 1. Fetch unified authorization headers (prefers valid Dastyorchi session, falls back to Firebase ID token)
+    const authHeaders = await getApiAuthorizationHeader();
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...authHeaders
+    };
+
     let response: Response;
     try {
       response = await fetch("/api/ai", {
@@ -154,12 +147,73 @@ export async function callAIServer(params: {
       const errorMessage = errorData.error || "AI xizmati bilan ulanishda xatolik yuz berdi.";
       const errorCode = errorData.code;
       const originalStatus = errorData.original_status || response.status;
-      
+
+      // Section 7: AUTOMATIC TELEGRAM SESSION RECOVERY
+      // If 401 AUTH_REQUIRED or SESSION_EXPIRED occurs in Telegram WebApp, attempt ONE silent re-auth
+      if (
+        (originalStatus === 401 || errorCode === "AUTH_REQUIRED" || errorCode === "SESSION_EXPIRED" || errorCode === "UNAUTHORIZED") &&
+        !hasAttemptedReauth
+      ) {
+        hasAttemptedReauth = true;
+        console.log("[callAIServer] 401 received. Attempting silent Telegram session recovery...");
+        const freshToken = await silentTelegramReauth();
+        if (freshToken) {
+          console.log("[callAIServer] Silent recovery successful. Retrying original AI request once...");
+          continue; // Retries with fresh token
+        } else {
+          console.warn("[callAIServer] Silent recovery unavailable or failed.");
+        }
+      }
+
+      // Authentic Authentication Failures (only when auth truly failed and cannot be recovered)
+      if (errorCode === "SESSION_EXPIRED") {
+        throw new AIServerError(
+          "Sessiyangiz muddati tugagan. Iltimos, qaytadan tizimga kiring.",
+          401,
+          errorData
+        );
+      }
+
+      if (errorCode === "AUTH_REQUIRED" || originalStatus === 401) {
+        throw new AIServerError(
+          "Iltimos, tizimga kiring (Avtorizatsiya talab etiladi).",
+          401,
+          errorData
+        );
+      }
+
       // Credit limit exceeded
       if (errorCode === "AI_CREDIT_LIMIT" || originalStatus === 429) {
         throw new AIServerError(
           errorMessage || "Bugungi bepul AI limitingiz tugadi. AI kreditlaringiz ertaga yangilanadi.",
           429,
+          errorData
+        );
+      }
+
+      // AI Configuration Error (Gemini API key missing)
+      if (errorCode === "AI_CONFIGURATION_ERROR") {
+        throw new AIServerError(
+          errorMessage || "Serverda AI konfiguratsiyasi sozlanmagan (GEMINI_API_KEY mavjud emas).",
+          503,
+          errorData
+        );
+      }
+
+      // Gemini Model Unavailable
+      if (errorCode === "MODEL_NOT_AVAILABLE") {
+        throw new AIServerError(
+          "Tanlangan Gemini modeli hozirda mavjud emas yoki qo'llab-quvvatlanmaydi.",
+          503,
+          errorData
+        );
+      }
+
+      // Provider Auth Error (Invalid Gemini API key)
+      if (errorCode === "PROVIDER_AUTH_ERROR") {
+        throw new AIServerError(
+          "Gemini provayderi autentifikatsiyasida xatolik yuz berdi (GEMINI_API_KEY yaroqsiz).",
+          500,
           errorData
         );
       }
@@ -188,8 +242,8 @@ export async function callAIServer(params: {
         throw new AIServerError("Suhbat hajmi juda kattalashib ketdi. Yangi suhbat (Chat) boshlashni tavsiya qilamiz.", 400, errorData);
       }
 
-      if (errorCode === "UNAUTHORIZED" || originalStatus === 401) {
-        throw new AIServerError("Iltimos, tizimga qayta kiring (Sessiya muddati tugagan).", 401, errorData);
+      if (errorCode === "FIRESTORE_ERROR") {
+        throw new AIServerError("Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi.", 500, errorData);
       }
 
       throw new AIServerError(errorMessage, originalStatus, errorData);

@@ -1,25 +1,78 @@
 export function classifyError(error: any): { type: string; friendlyMessage: string; code: string } {
+  const code = error?.code || error?.errorData?.code || error?.originalError?.code;
   const errMsg = error?.message || String(error || "");
   const errMsgLower = errMsg.toLowerCase();
   const status = error?.status || error?.statusCode || 0;
 
-  // 1. INVALID_API_KEY
-  if (
-    status === 400 && (errMsgLower.includes("api_key") || errMsgLower.includes("api key") || errMsgLower.includes("invalid")) ||
-    errMsgLower.includes("api_key_invalid") ||
-    errMsgLower.includes("api key not valid") ||
-    errMsgLower.includes("gemini api kaliti xato") ||
-    errMsgLower.includes("invalid api")
-  ) {
+  // 1. Explicit backend error codes
+  if (code === "SESSION_EXPIRED") {
     return {
-      type: "invalid api key",
-      friendlyMessage: "Tizimdagi yoki kiritilgan yuridik Gemini API tahlil kaliti noto'g'ri (Invalid API Key). Iltimos, kalitingizni tekshiring.",
-      code: "INVALID_API_KEY"
+      type: "session expired",
+      friendlyMessage: "Sessiyangiz muddati tugagan. Iltimos, tizimga qayta kiring.",
+      code: "SESSION_EXPIRED"
+    };
+  }
+
+  if (code === "AUTH_REQUIRED") {
+    return {
+      type: "auth required",
+      friendlyMessage: "Xizmatdan foydalanish uchun avtorizatsiya talab etiladi. Iltimos, tizimga kiring.",
+      code: "AUTH_REQUIRED"
+    };
+  }
+
+  if (code === "AI_CONFIGURATION_ERROR") {
+    return {
+      type: "ai configuration error",
+      friendlyMessage: "Serverda AI konfiguratsiyasi sozlanmagan (GEMINI_API_KEY mavjud emas). Administratorga murojaat qiling.",
+      code: "AI_CONFIGURATION_ERROR"
+    };
+  }
+
+  if (code === "MODEL_NOT_AVAILABLE") {
+    return {
+      type: "model unavailable",
+      friendlyMessage: "Tanlangan Gemini AI modeli hozirda mavjud emas yoki qo'llab-quvvatlanmaydi.",
+      code: "MODEL_NOT_AVAILABLE"
+    };
+  }
+
+  if (code === "PROVIDER_AUTH_ERROR" || errMsgLower.includes("gemini api kaliti xato") || errMsgLower.includes("api_key_invalid") || errMsgLower.includes("api key not valid")) {
+    return {
+      type: "provider auth error",
+      friendlyMessage: "AI provayderi autentifikatsiyasida xatolik yuz berdi (GEMINI_API_KEY noto'g'ri). Kreditlaringiz qaytarildi.",
+      code: "PROVIDER_AUTH_ERROR"
+    };
+  }
+
+  if (code === "AI_CREDIT_LIMIT") {
+    return {
+      type: "credit limit",
+      friendlyMessage: "Bugungi bepul AI limitingiz tugadi. AI kreditlaringiz ertaga yangilanadi.",
+      code: "AI_CREDIT_LIMIT"
+    };
+  }
+
+  if (code === "PROVIDER_RATE_LIMIT" || status === 429) {
+    return {
+      type: "rate limit",
+      friendlyMessage: "AI serverlarida vaqtinchalik yuqori yuklama (Rate Limit). Kreditlaringiz qaytarildi, birozdan so'ng qayta urinib ko'ring.",
+      code: "PROVIDER_RATE_LIMIT"
+    };
+  }
+
+  if (code === "FIRESTORE_ERROR") {
+    return {
+      type: "database error",
+      friendlyMessage: "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi. Kreditlaringiz qaytarildi.",
+      code: "FIRESTORE_ERROR"
     };
   }
 
   // 2. CONTEXT_OVERFLOW
   if (
+    code === "CONTEXT_OVERFLOW" ||
+    code === "CONTEXT_EXCEEDED" ||
     errMsgLower.includes("context window") ||
     errMsgLower.includes("context_length_exceeded") ||
     errMsgLower.includes("context limit") ||
@@ -30,48 +83,31 @@ export function classifyError(error: any): { type: string; friendlyMessage: stri
   ) {
     return {
       type: "context length exceeded",
-      friendlyMessage: "Hujjatlar matn hajmi AI modelining bir martalik maksimal chekkasidan oshib ketdi (Context Window Overflow). Matnni maydalash yoki kichiklashtirish talab etiladi.",
-      code: "CONTEXT_EXCEEDED"
+      friendlyMessage: "Hujjatlar yoki suhbat hajmi AI modelining bir martalik chegarasidan oshib ketdi. Yangi suhbat boshlash tavsiya etiladi.",
+      code: "CONTEXT_OVERFLOW"
     };
   }
 
   // 3. PAYLOAD_TOO_LARGE
   if (
+    code === "PAYLOAD_TOO_LARGE" ||
+    code === "REQUEST_TOO_LARGE" ||
     status === 413 ||
-    errMsgLower.includes("413") ||
     errMsgLower.includes("payload too large") ||
     errMsgLower.includes("request too large") ||
     errMsgLower.includes("request payload size exceeds") ||
     errMsgLower.includes("body size limit") ||
     errMsgLower.includes("size exceeded") ||
-    errMsgLower.includes("10485760 bytes") ||
     errMsgLower.includes("entity too large")
   ) {
     return {
       type: "request too large",
-      friendlyMessage: "Yuborilgan fayllar yoki so'rovning umumiy hajmi ruxsat etilgan limitdan katta (Payload Too Large - 413). Iltimos, kichikroq hajmli yoki kamroq fayl yuklang.",
-      code: "REQUEST_TOO_LARGE"
+      friendlyMessage: "Yuborilgan fayllar yoki so'rov hajmi ruxsat etilgan limitdan katta (Payload Too Large - 413). Kichikroq fayl yuklang.",
+      code: "PAYLOAD_TOO_LARGE"
     };
   }
 
-  // 4. AI_QUOTA_LIMIT (AI Quota limits / Rate limit / Too Many Requests)
-  if (
-    status === 429 ||
-    errMsgLower.includes("429") ||
-    errMsgLower.includes("quota_exceeded") ||
-    errMsgLower.includes("resource_exhausted") ||
-    errMsgLower.includes("resource exhausted") ||
-    errMsgLower.includes("quota exceeded") ||
-    (errMsgLower.includes("limit") && (errMsgLower.includes("quota") || errMsgLower.includes("rate") || errMsgLower.includes("request") || errMsgLower.includes("exhausted")))
-  ) {
-    return {
-      type: "quota exceeded",
-      friendlyMessage: "Kunlik yoki oylik bepul so'rovlar limiti yoki vaqtinchalik tezlik (rate) limiti tugagan (Gemini Quota Exceeded - 429).",
-      code: "QUOTA_EXCEEDED"
-    };
-  }
-
-  // 5. NETWORK_ERROR
+  // 4. NETWORK_ERROR
   if (
     errMsgLower.includes("fetch failed") ||
     errMsgLower.includes("network error") ||
@@ -83,13 +119,14 @@ export function classifyError(error: any): { type: string; friendlyMessage: stri
   ) {
     return {
       type: "network error",
-      friendlyMessage: "Tarmoq ulanish xatoligi yoki internet tarmoqqa bog'lana olmadi (Network Error).",
+      friendlyMessage: "Tarmoq ulanishida uzilish bo'ldi. Iltimos, internet aloqasini tekshiring.",
       code: "NETWORK_ERROR"
     };
   }
 
-  // 6. SERVER_ERROR
+  // 5. SERVER_ERROR
   if (
+    code === "SERVER_ERROR" ||
     status >= 500 ||
     errMsgLower.includes("500") ||
     errMsgLower.includes("502") ||
@@ -98,19 +135,18 @@ export function classifyError(error: any): { type: string; friendlyMessage: stri
     errMsgLower.includes("internal error") ||
     errMsgLower.includes("server error") ||
     errMsgLower.includes("unavailable") ||
-    errMsgLower.includes("overloaded") ||
-    errMsgLower.includes("high demand")
+    errMsgLower.includes("overloaded")
   ) {
     return {
       type: "server error",
-      friendlyMessage: "Google Gemini serverlarida vaqtinchalik xatolik yoki yuqori yuklama mavjud (Internal Server Error - 503/500).",
+      friendlyMessage: "AI serverida vaqtinchalik nosozlik yuz berdi. Kreditlaringiz hisobingizga qaytarildi.",
       code: "SERVER_ERROR"
     };
   }
 
   return {
     type: "unknown error",
-    friendlyMessage: error?.message || "Kutilmagan xatolik yuz berdi. Iltimos tahlilni boshqatdan urining.",
+    friendlyMessage: error?.message || "Kutilmagan xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
     code: "UNKNOWN"
   };
 }
@@ -118,50 +154,71 @@ export function classifyError(error: any): { type: string; friendlyMessage: stri
 export function getFriendlyErrorMessage(error: any, lang: string = "uz_lat"): string {
   if (!error) return "Tizimda kutilmagan xatolik yuz berdi.";
   
-  const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
-  
-  const isNetwork = msg.includes("network") || msg.includes("fetch") || msg.includes("offline") || msg.includes("failed to fetch") || msg.includes("internet");
-  const isAuth = msg.includes("auth") || msg.includes("unauthenticated") || msg.includes("permission-denied") || msg.includes("insufficient permissions") || msg.includes("expired") || msg.includes("login") || msg.includes("sign-in");
-  const isAi = msg.includes("overloaded") || msg.includes("api_key") || msg.includes("quota") || msg.includes("limit") || msg.includes("gemini") || msg.includes("ai") || msg.includes("exhausted") || msg.includes("resource_exhausted") || msg.includes("context") || msg.includes("payload") || msg.includes("size");
-  const isExport = msg.includes("pdf") || msg.includes("docx") || msg.includes("zip") || msg.includes("export");
-
-  if (isAi) {
-    const classified = classifyError(error);
-    if (lang === "ru") {
-      if (classified.code === "QUOTA_EXCEEDED") return "Превышена квота или лимит запросов ИИ (Quota Exceeded - 429). Попробуйте позже.";
-      if (classified.code === "CONTEXT_EXCEEDED") return "Превышен размер контекстного окна ИИ (Context Window Overflow). Сократите текст.";
-      if (classified.code === "REQUEST_TOO_LARGE") return "Запрос слишком большой по объёму (Payload Too Large - 413).";
-      if (classified.code === "INVALID_API_KEY") return "Неверный ИИ API ключ (Invalid API Key).";
-      return `Ошибка сервиса ИИ (${classified.type}): ${classified.friendlyMessage}`;
-    }
-    if (lang === "en") {
-      if (classified.code === "QUOTA_EXCEEDED") return "AI limit or quota exceeded (429 Quota Exceeded). Please try again later.";
-      if (classified.code === "CONTEXT_EXCEEDED") return "Context window exceeded too many tokens. Trim your text.";
-      if (classified.code === "REQUEST_TOO_LARGE") return "Request payload size is too large (413 Payload Too Large).";
-      if (classified.code === "INVALID_API_KEY") return "AI API key is invalid.";
-      return `AI Service error (${classified.type}): ${classified.friendlyMessage}`;
-    }
-    // Default uzbek
-    return classified.friendlyMessage;
-  }
+  const classified = classifyError(error);
+  const code = classified.code;
 
   if (lang === "ru") {
-    if (isNetwork) return "Ошибка сети. Пожалуйста, проверьте ваше интернет-подключение.";
-    if (isAuth) return "Срок действия сессии истек. Пожалуйста, войдите в систему заново.";
-    if (isExport) return "Ошибка экспорта документа. Пожалуйста, попробуйте еще раз.";
-    return "Произошла непредвиденная ошибка. Мы уже работаем над её устранением.";
-  }
-  
-  if (lang === "en") {
-    if (isNetwork) return "Network connection lost. Please check your internet connection.";
-    if (isAuth) return "Authentication expired or session is invalid. Please sign in again.";
-    if (isExport) return "Document export failed. Please try again.";
-    return "An unexpected error occurred. Our team has been notified.";
+    switch (code) {
+      case "SESSION_EXPIRED":
+        return "Срок действия вашей сессии истек. Пожалуйста, войдите снова.";
+      case "AUTH_REQUIRED":
+        return "Для использования сервиса требуется авторизация. Пожалуйста, войдите.";
+      case "AI_CONFIGURATION_ERROR":
+        return "На сервере не настроена конфигурация ИИ (отсутствует GEMINI_API_KEY). Обратитесь к администратору.";
+      case "MODEL_NOT_AVAILABLE":
+        return "Выбранная модель Gemini в настоящее время недоступна.";
+      case "PROVIDER_AUTH_ERROR":
+        return "Ошибка аутентификации у провайдера ИИ (неверный GEMINI_API_KEY). Ваши кредиты возвращены.";
+      case "AI_CREDIT_LIMIT":
+        return "Ваш дневной лимит ИИ кредитов исчерпан. Кредиты обновятся завтра.";
+      case "PROVIDER_RATE_LIMIT":
+        return "Временная перегрузка серверов ИИ (Rate Limit). Ваши кредиты возвращены, попробуйте чуть позже.";
+      case "FIRESTORE_ERROR":
+        return "Ошибка базы данных. Ваши кредиты возвращены.";
+      case "CONTEXT_OVERFLOW":
+        return "Превышен размер контекстного окна ИИ. Рекомендуется начать новый диалог.";
+      case "PAYLOAD_TOO_LARGE":
+        return "Запрос или файл слишком большой по объёму (Payload Too Large - 413).";
+      case "NETWORK_ERROR":
+        return "Ошибка сети. Пожалуйста, проверьте ваше интернет-подключение.";
+      case "SERVER_ERROR":
+        return "Временный сбой сервиса ИИ. Ваши кредиты возвращены на баланс.";
+      default:
+        return classified.friendlyMessage;
+    }
   }
 
-  // default uz_lat
-  if (isNetwork) return "Tarmoq ulanishi yo'q yoki internet uzildi. Iltimos, aloqani tekshiring.";
-  if (isAuth) return "Sessiyangiz muddati tugadi yoki profilga kirish muvaffaqiyatsiz bo'ldi. Iltimos, qayta kiring.";
-  if (isExport) return "Hujjatni eksport qilish muvaffaqiyatsiz bo'ldi. Iltimos, qaytadan urinib ko'ring.";
-  return "Kutilmagan texnik xatolik yuz berdi. Tizim jurnali yangilandi va mutaxassis ogohlantirildi.";
+  if (lang === "en") {
+    switch (code) {
+      case "SESSION_EXPIRED":
+        return "Your session has expired. Please sign in again.";
+      case "AUTH_REQUIRED":
+        return "Authentication required to use this service. Please sign in.";
+      case "AI_CONFIGURATION_ERROR":
+        return "Server AI configuration error (GEMINI_API_KEY is missing). Please contact administrator.";
+      case "MODEL_NOT_AVAILABLE":
+        return "The configured Gemini model is currently unavailable.";
+      case "PROVIDER_AUTH_ERROR":
+        return "AI provider authentication failed (invalid GEMINI_API_KEY). Credits refunded.";
+      case "AI_CREDIT_LIMIT":
+        return "Daily AI credit limit reached. Your credits will reset tomorrow.";
+      case "PROVIDER_RATE_LIMIT":
+        return "Temporary AI provider rate limit. Credits refunded, please try again shortly.";
+      case "FIRESTORE_ERROR":
+        return "Database persistence error occurred. Credits refunded.";
+      case "CONTEXT_OVERFLOW":
+        return "Context window limit exceeded. Starting a new chat is recommended.";
+      case "PAYLOAD_TOO_LARGE":
+        return "Request payload size is too large (413 Payload Too Large).";
+      case "NETWORK_ERROR":
+        return "Network connection lost. Please check your internet connection.";
+      case "SERVER_ERROR":
+        return "Temporary AI service error. Credits refunded to your account.";
+      default:
+        return classified.friendlyMessage;
+    }
+  }
+
+  // Default uz_lat
+  return classified.friendlyMessage;
 }

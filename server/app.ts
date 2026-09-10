@@ -177,12 +177,15 @@ function verifyTelegramWebAppData(initData: string, botToken: string): { valid: 
   }
 }
 
+export type SessionFailReason = "missing_token" | "malformed_token" | "signature_mismatch" | "expired";
+
 function getSessionSecret(): string {
   const secret = process.env.SESSION_SECRET?.trim();
   if (secret) {
     return secret;
   }
   if (process.env.NODE_ENV === "production") {
+    console.error("[Session] FATAL: SESSION_SECRET is required in production environment.");
     throw new Error("Server configuration error: SESSION_SECRET is required in production.");
   }
   return process.env.TELEGRAM_BOT_TOKEN?.trim() || "dastyorchi_dev_session_secret";
@@ -195,24 +198,61 @@ function createSessionToken(payload: any): string {
   return `${data}.${signature}`;
 }
 
-function verifySessionToken(token: string): { valid: boolean; payload?: any; error?: string } {
+export function verifySessionToken(token: string): {
+  valid: boolean;
+  payload?: any;
+  reason?: SessionFailReason;
+  error?: string;
+} {
   try {
-    if (!token || !token.includes(".")) {
-      return { valid: false, error: "Yaroqsiz token formati" };
+    if (!token) {
+      return { valid: false, reason: "missing_token", error: "Token taqdim etilmagan" };
     }
-    const secret = getSessionSecret();
-    const [data, signature] = token.split(".");
-    const expectedSignature = crypto.createHmac("sha256", secret).update(data).digest("base64url");
-    if (signature !== expectedSignature) {
-      return { valid: false, error: "Token imzosi noto'g'ri" };
+    const cleanToken = token.trim();
+    const parts = cleanToken.split(".");
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      return { valid: false, reason: "malformed_token", error: "Yaroqsiz token formati" };
     }
-    const payload = JSON.parse(Buffer.from(data, "base64url").toString("utf-8"));
+
+    let secret: string;
+    try {
+      secret = getSessionSecret();
+    } catch (err: any) {
+      return { valid: false, reason: "malformed_token", error: err.message };
+    }
+
+    const [data, signature] = parts;
+    let expectedSignature: string;
+    try {
+      expectedSignature = crypto.createHmac("sha256", secret).update(data).digest("base64url");
+    } catch (err: any) {
+      return { valid: false, reason: "malformed_token", error: "Imzo hisoblashda xatolik" };
+    }
+
+    const sigBuf = Buffer.from(signature, "utf-8");
+    const expBuf = Buffer.from(expectedSignature, "utf-8");
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+      return { valid: false, reason: "signature_mismatch", error: "Token imzosi noto'g'ri" };
+    }
+
+    let payload: any;
+    try {
+      payload = JSON.parse(Buffer.from(data, "base64url").toString("utf-8"));
+    } catch {
+      return { valid: false, reason: "malformed_token", error: "Token ma'lumotini o'qib bo'lmadi" };
+    }
+
     if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
-      return { valid: false, error: "Sessiya vaqti tugagan" };
+      return { valid: false, reason: "expired", error: "Sessiya vaqti tugagan" };
     }
+
+    if (!payload.uid) {
+      return { valid: false, reason: "malformed_token", error: "Token foydalanuvchi ma'lumotiga ega emas" };
+    }
+
     return { valid: true, payload };
   } catch (err: any) {
-    return { valid: false, error: err.message || "Tokenni tekshirishda xatolik" };
+    return { valid: false, reason: "malformed_token", error: err.message || "Tokenni tekshirishda xatolik" };
   }
 }
 
@@ -239,38 +279,147 @@ async function upgradeUserSubscription(userId: string, tier: "pro" | "business",
   }
 }
 
+export interface RequestAuthDiagnosis {
+  userId: string | null;
+  authHeaderPresent: boolean;
+  tokenFormat: "session" | "firebase" | "unknown";
+  sessionVerification: "pass" | "fail";
+  sessionFailReason?: SessionFailReason | null;
+  firebaseVerificationAttempted: boolean;
+  firebaseVerification: "pass" | "fail" | "skipped";
+  firebaseFailReason?: "firebase_invalid" | null;
+  errorCode?: "AUTH_REQUIRED" | "SESSION_EXPIRED";
+  error?: string;
+}
+
 /**
- * Authenticates user from Authorization header (Session token or Firebase ID token).
- * Falls back to dev request body in non-production environments.
+ * Authoritative diagnostic request authenticator used uniformly by all protected routes.
+ * Inspects Authorization header, verifies HMAC session or Firebase ID token, and enforces
+ * strict error categorization without logging credentials or secrets.
+ */
+export async function authenticateRequestDetails(req: express.Request): Promise<RequestAuthDiagnosis> {
+  const rawAuth = (req.headers.authorization || req.headers.Authorization || "") as string;
+  const authHeaderPresent = Boolean(rawAuth && rawAuth.trim().length > 0);
+
+  if (!authHeaderPresent) {
+    const devUserId = process.env.NODE_ENV !== "production" && req.body?.userId ? req.body.userId : null;
+    return {
+      userId: devUserId,
+      authHeaderPresent: false,
+      tokenFormat: "unknown",
+      sessionVerification: "fail",
+      sessionFailReason: "missing_token",
+      firebaseVerificationAttempted: false,
+      firebaseVerification: "skipped",
+      errorCode: "AUTH_REQUIRED",
+      error: "Authentication required"
+    };
+  }
+
+  const token = rawAuth.replace(/^Bearer\s+/i, "").trim();
+  if (!token) {
+    const devUserId = process.env.NODE_ENV !== "production" && req.body?.userId ? req.body.userId : null;
+    return {
+      userId: devUserId,
+      authHeaderPresent: true,
+      tokenFormat: "unknown",
+      sessionVerification: "fail",
+      sessionFailReason: "missing_token",
+      firebaseVerificationAttempted: false,
+      firebaseVerification: "skipped",
+      errorCode: "AUTH_REQUIRED",
+      error: "Authentication required"
+    };
+  }
+
+  const dotCount = (token.match(/\./g) || []).length;
+  let tokenFormat: "session" | "firebase" | "unknown" = "unknown";
+  if (dotCount === 1) {
+    tokenFormat = "session";
+  } else if (dotCount === 2) {
+    tokenFormat = "firebase";
+  }
+
+  // 1. First priority: Dastyorchi HMAC session token verification
+  const sessionResult = verifySessionToken(token);
+  if (sessionResult.valid && sessionResult.payload?.uid) {
+    return {
+      userId: sessionResult.payload.uid,
+      authHeaderPresent: true,
+      tokenFormat: "session",
+      sessionVerification: "pass",
+      firebaseVerificationAttempted: false,
+      firebaseVerification: "skipped"
+    };
+  }
+
+  const sessionFailReason = sessionResult.reason || "malformed_token";
+
+  // 2. Second priority: Firebase ID token verification if Firebase Admin is initialized
+  let firebaseVerificationAttempted = false;
+  let firebaseVerification: "pass" | "fail" | "skipped" = "skipped";
+  let firebaseFailReason: "firebase_invalid" | null = null;
+
+  if (admin.apps.length > 0) {
+    firebaseVerificationAttempted = true;
+    try {
+      const decoded = await admin.auth().verifyIdToken(token);
+      if (decoded && decoded.uid) {
+        return {
+          userId: decoded.uid,
+          authHeaderPresent: true,
+          tokenFormat: tokenFormat === "unknown" ? "firebase" : tokenFormat,
+          sessionVerification: "fail",
+          sessionFailReason,
+          firebaseVerificationAttempted: true,
+          firebaseVerification: "pass"
+        };
+      } else {
+        firebaseVerification = "fail";
+        firebaseFailReason = "firebase_invalid";
+      }
+    } catch {
+      firebaseVerification = "fail";
+      firebaseFailReason = "firebase_invalid";
+    }
+  }
+
+  // 3. Fallback for non-production development testing
+  if (process.env.NODE_ENV !== "production" && req.body?.userId) {
+    return {
+      userId: req.body.userId,
+      authHeaderPresent: true,
+      tokenFormat,
+      sessionVerification: "fail",
+      sessionFailReason,
+      firebaseVerificationAttempted,
+      firebaseVerification,
+      firebaseFailReason
+    };
+  }
+
+  // Authentic verification failure
+  const isExpired = sessionFailReason === "expired";
+  return {
+    userId: null,
+    authHeaderPresent: true,
+    tokenFormat,
+    sessionVerification: "fail",
+    sessionFailReason,
+    firebaseVerificationAttempted,
+    firebaseVerification,
+    firebaseFailReason,
+    errorCode: isExpired ? "SESSION_EXPIRED" : "AUTH_REQUIRED",
+    error: isExpired ? "Session expired" : "Authentication required"
+  };
+}
+
+/**
+ * Canonical authenticateRequestUser function used uniformly across all endpoints.
  */
 async function authenticateRequestUser(req: express.Request): Promise<string | null> {
-  const authHeader = req.headers.authorization || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.substring(7) : authHeader;
-
-  if (token) {
-    // 1. Try our HMAC-SHA256 session token
-    const verified = verifySessionToken(token);
-    if (verified.valid && verified.payload?.uid) {
-      return verified.payload.uid;
-    }
-
-    // 2. Try Firebase ID Token if admin is available
-    if (admin.apps.length > 0) {
-      try {
-        const decoded = await admin.auth().verifyIdToken(token);
-        if (decoded && decoded.uid) {
-          return decoded.uid;
-        }
-      } catch (e) {}
-    }
-  }
-
-  // 3. Fallback in dev mode for testing convenience
-  if (process.env.NODE_ENV !== "production" && req.body?.userId) {
-    return req.body.userId;
-  }
-
-  return null;
+  const diagnosis = await authenticateRequestDetails(req);
+  return diagnosis.userId;
 }
 
 // ==========================================
@@ -689,11 +838,13 @@ apiRouter.post("/auth/dev-login", async (req, res) => {
 // ------------------------------------------
 apiRouter.get("/ai/credits", async (req, res) => {
   try {
-    const userId = await authenticateRequestUser(req);
+    const authInspection = await authenticateRequestDetails(req);
+    const userId = authInspection.userId;
     if (!userId) {
+      const isExpired = authInspection.sessionFailReason === "expired";
       return res.status(401).json({
-        error: "Sessiya topilmadi yoki eskirgan. Iltimos, tizimga kiring.",
-        code: "UNAUTHORIZED"
+        error: isExpired ? "Session expired" : "Authentication required",
+        code: isExpired ? "SESSION_EXPIRED" : "AUTH_REQUIRED"
       });
     }
     const status = await getUserCreditStatus(dbAdmin, userId);
@@ -741,11 +892,27 @@ apiRouter.get("/admin/ai-analytics", async (req, res) => {
 // POST /ai - Centralized Production AI Gateway
 // ------------------------------------------
 apiRouter.post("/ai", async (req, res) => {
-  const userId = await authenticateRequestUser(req);
+  console.log("[AI Auth] request received");
+  const authInspection = await authenticateRequestDetails(req);
+  console.log("[AI Auth] Authorization header present:", authInspection.authHeaderPresent ? "yes" : "no");
+  console.log("[AI Auth] token format:", authInspection.tokenFormat);
+  console.log("[AI Auth] session verification:", authInspection.sessionVerification);
+  console.log("[AI Auth] firebase verification attempted:", authInspection.firebaseVerificationAttempted ? "yes" : "no");
+  if (authInspection.firebaseVerificationAttempted) {
+    console.log("[AI Auth] firebase verification:", authInspection.firebaseVerification);
+  }
+  console.log("[AI Auth] authenticated uid:", authInspection.userId || "none");
+
+  if (authInspection.sessionVerification === "fail" && authInspection.sessionFailReason) {
+    console.log("[AI Auth] session failure reason:", authInspection.sessionFailReason);
+  }
+
+  const userId = authInspection.userId;
   if (!userId) {
+    const isExpired = authInspection.sessionFailReason === "expired";
     return res.status(401).json({
-      error: "Iltimos, tizimga qayta kiring (Sessiya topilmadi yoki eskirgan).",
-      code: "UNAUTHORIZED"
+      error: isExpired ? "Session expired" : "Authentication required",
+      code: isExpired ? "SESSION_EXPIRED" : "AUTH_REQUIRED"
     });
   }
 
@@ -777,13 +944,13 @@ apiRouter.post("/ai", async (req, res) => {
       });
     }
 
-    // 2. Server-side authoritative GEMINI_API_KEY
+    // 2. Server-side authoritative GEMINI_API_KEY check
     const apiKey = process.env.GEMINI_API_KEY?.trim() || "";
     if (!apiKey || apiKey === "MY_GEMINI_API_KEY" || apiKey === "your_real_key_here") {
       await refundAiUsage(dbAdmin, reservation.requestId, userId, creditCost, "Server GEMINI_API_KEY missing");
-      return res.status(500).json({
-        error: "Serverda Gemini API sozlanmagan. Iltimos, administratorga murojaat qiling.",
-        code: "SERVER_CONFIG_ERROR",
+      return res.status(503).json({
+        error: "Serverda Gemini API sozlanmagan (GEMINI_API_KEY mavjud emas). Iltimos, administratorga murojaat qiling.",
+        code: "AI_CONFIGURATION_ERROR",
         refunded: true
       });
     }
@@ -854,10 +1021,24 @@ apiRouter.post("/ai", async (req, res) => {
     let errorCode = "SERVER_ERROR";
     let friendlyMessage = "AI xizmatida vaqtinchalik nosozlik yuz berdi. Kreditlaringiz hisobingizga qaytarildi. Iltimos, qayta urinib ko'ring.";
 
-    if (errLower.includes("api_key_invalid") || errLower.includes("api key not valid")) {
+    if (
+      errLower.includes("api_key_invalid") ||
+      errLower.includes("api key not valid") ||
+      errLower.includes("api key invalid") ||
+      (errLower.includes("401") && (errLower.includes("key") || errLower.includes("credential") || errLower.includes("unauthenticated")))
+    ) {
       status = 500;
-      errorCode = "AUTH_CONFIG_ERROR";
-      friendlyMessage = "Server konfiguratsiyasida xatolik. AI kreditlaringiz qaytarildi.";
+      errorCode = "PROVIDER_AUTH_ERROR";
+      friendlyMessage = "Gemini API provayderi autentifikatsiyasida xatolik yuz berdi (GEMINI_API_KEY xato). Kreditlaringiz qaytarildi.";
+    } else if (
+      errLower.includes("not found") ||
+      errLower.includes("is not found for api version") ||
+      errLower.includes("models/") ||
+      (errLower.includes("model") && (errLower.includes("not supported") || errLower.includes("unavailable") || errLower.includes("not found")))
+    ) {
+      status = 503;
+      errorCode = "MODEL_NOT_AVAILABLE";
+      friendlyMessage = "Configured Gemini model is unavailable.";
     } else if (errLower.includes("429") || errLower.includes("quota") || errLower.includes("resource_exhausted")) {
       status = 429;
       errorCode = "PROVIDER_RATE_LIMIT";
@@ -870,6 +1051,10 @@ apiRouter.post("/ai", async (req, res) => {
       status = 400;
       errorCode = "CONTEXT_OVERFLOW";
       friendlyMessage = "Suhbat tarixi yoki hujjat hajmi model chegarasidan oshib ketdi. Kreditlaringiz qaytarildi.";
+    } else if (errLower.includes("firestore") || errLower.includes("database")) {
+      status = 500;
+      errorCode = "FIRESTORE_ERROR";
+      friendlyMessage = "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi. Kreditlaringiz qaytarildi.";
     }
 
     return res.status(status).json({
