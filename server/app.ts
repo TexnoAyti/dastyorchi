@@ -848,6 +848,9 @@ apiRouter.get("/ai/credits", async (req, res) => {
       });
     }
     const status = await getUserCreditStatus(dbAdmin, userId);
+    if (status.code === "CREDIT_STORAGE_UNAVAILABLE") {
+      return res.status(503).json(status);
+    }
     return res.json(status);
   } catch (err: any) {
     return res.status(500).json({
@@ -916,46 +919,99 @@ apiRouter.post("/ai", async (req, res) => {
     });
   }
 
-  // Check concurrency lock
-  if (!acquireUserLock(userId)) {
-    return res.status(429).json({
-      error: "Oldingi so'rovingiz hali bajarilmoqda. Iltimos, uning yakunlanishini kuting.",
-      code: "CONCURRENT_REQUEST"
-    });
-  }
-
   const { contents, systemInstruction, config, model } = req.body || {};
   const operation: AIOperation = validateOperation(req.body?.operation);
   const targetModel = resolveModel(operation, model);
   const creditCost = AI_CREDIT_COSTS[operation] || 1;
 
+  // Requirement 1 logging stages:
+  console.log(`[AI Gateway] authenticated uid: ${userId}`);
+  console.log(`[AI Gateway] operation: ${operation}`);
+  console.log(`[AI Gateway] requested credit cost: ${creditCost}`);
+
+  // Requirement 6: Check concurrency lock (HTTP 409, code CONCURRENT_REQUEST, NOT HTTP 429)
+  if (!acquireUserLock(userId)) {
+    console.log("[AI Gateway] 429_SOURCE=CONCURRENCY_LIMIT");
+    console.log("[AI Gateway] final response code: CONCURRENT_REQUEST");
+    return res.status(409).json({
+      error: "Oldingi so'rovingiz hali bajarilmoqda. Iltimos, uning yakunlanishini kuting.",
+      code: "CONCURRENT_REQUEST"
+    });
+  }
+
   let reservation: ReservationResult | null = null;
 
   try {
-    // 1. Atomically reserve credits via Firestore transaction (or memory fallback)
+    // 1. Atomically reserve credits
     reservation = await reserveCredits(dbAdmin, userId, operation, targetModel);
+
+    // If reservation was not allowed:
     if (!reservation.allowed) {
-      return res.status(429).json({
-        error: reservation.error || "Bugungi bepul AI limitingiz tugadi. AI kreditlaringiz ertaga yangilanadi.",
-        code: reservation.code || "AI_CREDIT_LIMIT",
-        creditsRemaining: reservation.creditsRemaining,
-        creditsDailyLimit: reservation.creditsDailyLimit,
-        resetDate: reservation.resetDate
+      if (reservation.code === "AI_CREDIT_LIMIT") {
+        console.log(`[AI Gateway] credits before: ${reservation.creditsRemaining}`);
+        console.log(`[AI Gateway] credits after reservation: ${reservation.creditsRemaining}`);
+        console.log("[AI Gateway] 429_SOURCE=USER_CREDIT_LIMIT");
+        console.log("[AI Gateway] final response code: AI_CREDIT_LIMIT");
+        return res.status(429).json({
+          error: "Bugungi bepul AI limitingiz tugadi. AI kreditlaringiz ertaga yangilanadi.",
+          code: "AI_CREDIT_LIMIT",
+          creditsRemaining: reservation.creditsRemaining,
+          creditsDailyLimit: reservation.creditsDailyLimit,
+          resetDate: reservation.resetDate
+        });
+      }
+
+      if (reservation.code === "GLOBAL_SAFETY_LIMIT") {
+        console.log(`[AI Gateway] credits before: ${reservation.creditsRemaining}`);
+        console.log(`[AI Gateway] credits after reservation: ${reservation.creditsRemaining}`);
+        console.log("[AI Gateway] 429_SOURCE=GLOBAL_SAFETY_LIMIT");
+        console.log("[AI Gateway] final response code: GLOBAL_SAFETY_LIMIT");
+        return res.status(429).json({
+          error: reservation.error || "Tizimda bugungi umumiy so'rovlar chegarasiga yetildi. Iltimos, keyinroq qayta urinib ko'ring.",
+          code: "GLOBAL_SAFETY_LIMIT",
+          creditsRemaining: reservation.creditsRemaining,
+          creditsDailyLimit: reservation.creditsDailyLimit,
+          resetDate: reservation.resetDate
+        });
+      }
+
+      if (reservation.code === "CREDIT_STORAGE_UNAVAILABLE") {
+        console.log("[AI Gateway] final response code: CREDIT_STORAGE_UNAVAILABLE");
+        return res.status(503).json({
+          error: reservation.error || "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
+          code: "CREDIT_STORAGE_UNAVAILABLE"
+        });
+      }
+
+      console.log(`[AI Gateway] final response code: ${reservation.code || "RESERVATION_FAILED"}`);
+      return res.status(500).json({
+        error: reservation.error || "Kreditlarni tekshirishda xatolik yuz berdi.",
+        code: reservation.code || "RESERVATION_FAILED"
       });
     }
+
+    // Reservation succeeded:
+    const creditsBefore = reservation.creditsRemaining + creditCost;
+    const creditsAfter = reservation.creditsRemaining;
+    console.log(`[AI Gateway] credits before: ${creditsBefore}`);
+    console.log(`[AI Gateway] credits after reservation: ${creditsAfter}`);
+    console.log(`[AI Gateway] resolved model: ${targetModel}`);
 
     // 2. Server-side authoritative GEMINI_API_KEY check
     const apiKey = process.env.GEMINI_API_KEY?.trim() || "";
     if (!apiKey || apiKey === "MY_GEMINI_API_KEY" || apiKey === "your_real_key_here") {
       await refundAiUsage(dbAdmin, reservation.requestId, userId, creditCost, "Server GEMINI_API_KEY missing");
+      console.log("[AI Gateway] final response code: AI_CONFIGURATION_ERROR");
       return res.status(503).json({
         error: "Serverda Gemini API sozlanmagan (GEMINI_API_KEY mavjud emas). Iltimos, administratorga murojaat qiling.",
         code: "AI_CONFIGURATION_ERROR",
-        refunded: true
+        refunded: true,
+        creditsRemaining: creditsBefore
       });
     }
 
     // 3. Call Gemini API
+    console.log("[AI Gateway] provider request start");
     const genAI = new GoogleGenAI({
       apiKey,
       httpOptions: {
@@ -980,6 +1036,10 @@ apiRouter.post("/ai", async (req, res) => {
       throw new Error("Provider returned empty response");
     }
 
+    console.log("[AI Gateway] provider response status: 200");
+    console.log("[AI Gateway] provider error category: NONE");
+    console.log("[AI Gateway] final response code: SUCCESS");
+
     // 4. Token accounting from response usageMetadata
     const usageMetadata = (result as any).usageMetadata || {};
     const inputTokens = usageMetadata.promptTokenCount || 0;
@@ -1003,23 +1063,52 @@ apiRouter.post("/ai", async (req, res) => {
       model: targetModel
     });
   } catch (error: any) {
-    console.error(`[AI Gateway] Error processing request for user ${userId}:`, error.message || error);
+    const errorMessage = typeof error === "object" ? (error.message || JSON.stringify(error)) : String(error);
+    const errLower = errorMessage.toLowerCase();
 
-    // Idempotent refund on failure
+    // Provider status diagnostics
+    const providerStatus = error?.status || error?.statusCode || (errLower.includes("resource_exhausted") || errLower.includes("429") ? 429 : 500);
+    const providerErrorCode = error?.code || error?.error?.code || (errLower.includes("resource_exhausted") ? "RESOURCE_EXHAUSTED" : undefined);
+    const providerErrorType = error?.error?.status || error?.name || "ProviderError";
+    const retryAfter = error?.response?.headers?.get?.("retry-after") || error?.retryAfter;
+
+    // Requirement 7: Log only safe Gemini provider diagnostics (never GEMINI_API_KEY)
+    console.log(`[AI Gateway] provider status: ${providerStatus}`);
+    if (providerErrorCode) console.log(`[AI Gateway] provider error code: ${providerErrorCode}`);
+    console.log(`[AI Gateway] provider error type: ${providerErrorType}`);
+    console.log(`[AI Gateway] model name: ${targetModel}`);
+    if (retryAfter) console.log(`[AI Gateway] retry-after: ${retryAfter}`);
+
+    // Requirements 3 & 8: Atomically refund credits on failure
     if (reservation && reservation.allowed) {
       try {
-        await refundAiUsage(dbAdmin, reservation.requestId, userId, creditCost, error.message || String(error));
+        await refundAiUsage(dbAdmin, reservation.requestId, userId, creditCost, errorMessage);
+        console.log(`[AI Gateway] Atomically refunded ${creditCost} credit(s) to user ${userId}. Final visible credits: ${reservation.creditsRemaining + creditCost}`);
       } catch (refundErr: any) {
         console.error("[AI Gateway] Error in refund:", refundErr.message);
       }
     }
 
-    const errorMessage = typeof error === "object" ? (error.message || JSON.stringify(error)) : String(error);
-    const errLower = errorMessage.toLowerCase();
+    const isQuotaOrRateLimit =
+      errLower.includes("429") ||
+      errLower.includes("quota") ||
+      errLower.includes("resource_exhausted") ||
+      providerStatus === 429;
 
-    let status = 500;
-    let errorCode = "SERVER_ERROR";
-    let friendlyMessage = "AI xizmatida vaqtinchalik nosozlik yuz berdi. Kreditlaringiz hisobingizga qaytarildi. Iltimos, qayta urinib ko'ring.";
+    if (isQuotaOrRateLimit) {
+      console.log("[AI Gateway] provider response status: 429");
+      console.log("[AI Gateway] provider error category: RESOURCE_EXHAUSTED");
+      console.log("[AI Gateway] 429_SOURCE=PROVIDER_RATE_LIMIT");
+      console.log("[AI Gateway] final response code: PROVIDER_RATE_LIMIT");
+      return res.status(429).json({
+        code: "PROVIDER_RATE_LIMIT",
+        error: "AI provayderining vaqtinchalik limiti tugadi.",
+        provider: "gemini",
+        refunded: true,
+        creditsRemaining: reservation ? (reservation.creditsRemaining + creditCost) : undefined,
+        creditsDailyLimit: reservation?.creditsDailyLimit
+      });
+    }
 
     if (
       errLower.includes("api_key_invalid") ||
@@ -1027,44 +1116,69 @@ apiRouter.post("/ai", async (req, res) => {
       errLower.includes("api key invalid") ||
       (errLower.includes("401") && (errLower.includes("key") || errLower.includes("credential") || errLower.includes("unauthenticated")))
     ) {
-      status = 500;
-      errorCode = "PROVIDER_AUTH_ERROR";
-      friendlyMessage = "Gemini API provayderi autentifikatsiyasida xatolik yuz berdi (GEMINI_API_KEY xato). Kreditlaringiz qaytarildi.";
-    } else if (
+      console.log("[AI Gateway] provider response status: 401");
+      console.log("[AI Gateway] provider error category: PROVIDER_AUTH_ERROR");
+      console.log("[AI Gateway] final response code: PROVIDER_AUTH_ERROR");
+      return res.status(500).json({
+        code: "PROVIDER_AUTH_ERROR",
+        error: "Gemini API provayderi autentifikatsiyasida xatolik yuz berdi (GEMINI_API_KEY xato). Kreditlaringiz qaytarildi.",
+        refunded: true,
+        creditsRemaining: reservation ? (reservation.creditsRemaining + creditCost) : undefined
+      });
+    }
+
+    if (
       errLower.includes("not found") ||
       errLower.includes("is not found for api version") ||
       errLower.includes("models/") ||
       (errLower.includes("model") && (errLower.includes("not supported") || errLower.includes("unavailable") || errLower.includes("not found")))
     ) {
-      status = 503;
-      errorCode = "MODEL_NOT_AVAILABLE";
-      friendlyMessage = "Configured Gemini model is unavailable.";
-    } else if (errLower.includes("429") || errLower.includes("quota") || errLower.includes("resource_exhausted")) {
-      status = 429;
-      errorCode = "PROVIDER_RATE_LIMIT";
-      friendlyMessage = "Google AI serverlarida vaqtinchalik yuqori yuklama (Rate Limit). Kreditlaringiz qaytarildi, iltimos birozdan so'ng qayta urinib ko'ring.";
-    } else if (errLower.includes("413") || errLower.includes("payload") || errLower.includes("body too large")) {
-      status = 413;
-      errorCode = "PAYLOAD_TOO_LARGE";
-      friendlyMessage = "Yuborilgan fayl yoki matn hajmi juda katta. Kreditlaringiz qaytarildi.";
-    } else if (errLower.includes("context_length_exceeded") || errLower.includes("context overflow")) {
-      status = 400;
-      errorCode = "CONTEXT_OVERFLOW";
-      friendlyMessage = "Suhbat tarixi yoki hujjat hajmi model chegarasidan oshib ketdi. Kreditlaringiz qaytarildi.";
-    } else if (errLower.includes("firestore") || errLower.includes("database")) {
-      status = 500;
-      errorCode = "FIRESTORE_ERROR";
-      friendlyMessage = "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi. Kreditlaringiz qaytarildi.";
+      console.log("[AI Gateway] provider response status: 503");
+      console.log("[AI Gateway] provider error category: MODEL_NOT_AVAILABLE");
+      console.log("[AI Gateway] final response code: MODEL_NOT_AVAILABLE");
+      return res.status(503).json({
+        code: "MODEL_NOT_AVAILABLE",
+        error: "Tanlangan Gemini modeli hozirda mavjud emas yoki qo'llab-quvvatlanmaydi.",
+        refunded: true,
+        creditsRemaining: reservation ? (reservation.creditsRemaining + creditCost) : undefined
+      });
     }
 
-    return res.status(status).json({
-      error: friendlyMessage,
-      code: errorCode,
+    if (errLower.includes("413") || errLower.includes("payload") || errLower.includes("body too large")) {
+      console.log("[AI Gateway] provider response status: 413");
+      console.log("[AI Gateway] provider error category: PAYLOAD_TOO_LARGE");
+      console.log("[AI Gateway] final response code: PAYLOAD_TOO_LARGE");
+      return res.status(413).json({
+        code: "PAYLOAD_TOO_LARGE",
+        error: "Yuborilgan fayl yoki matn hajmi juda katta. Kreditlaringiz qaytarildi.",
+        refunded: true,
+        creditsRemaining: reservation ? (reservation.creditsRemaining + creditCost) : undefined
+      });
+    }
+
+    if (errLower.includes("context_length_exceeded") || errLower.includes("context overflow")) {
+      console.log("[AI Gateway] provider response status: 400");
+      console.log("[AI Gateway] provider error category: CONTEXT_OVERFLOW");
+      console.log("[AI Gateway] final response code: CONTEXT_OVERFLOW");
+      return res.status(400).json({
+        code: "CONTEXT_OVERFLOW",
+        error: "Suhbat tarixi yoki hujjat hajmi model chegarasidan oshib ketdi. Kreditlaringiz qaytarildi.",
+        refunded: true,
+        creditsRemaining: reservation ? (reservation.creditsRemaining + creditCost) : undefined
+      });
+    }
+
+    console.log(`[AI Gateway] provider response status: ${providerStatus}`);
+    console.log("[AI Gateway] provider error category: SERVER_ERROR");
+    console.log("[AI Gateway] final response code: SERVER_ERROR");
+    return res.status(500).json({
+      code: "SERVER_ERROR",
+      error: "AI xizmatida vaqtinchalik nosozlik yuz berdi. Kreditlaringiz hisobingizga qaytarildi. Iltimos, qayta urinib ko'ring.",
       refunded: true,
-      creditsRemaining: reservation ? (reservation.creditsRemaining + creditCost) : undefined,
-      creditsDailyLimit: reservation?.creditsDailyLimit
+      creditsRemaining: reservation ? (reservation.creditsRemaining + creditCost) : undefined
     });
   } finally {
+    // Requirement 6: Lock must ALWAYS be released in finally
     releaseUserLock(userId);
   }
 });

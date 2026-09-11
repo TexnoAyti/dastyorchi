@@ -22,12 +22,31 @@ export const DEFAULT_TIER_LIMITS: Record<string, number> = {
 
 // Global safety thresholds (configurable via environment variables)
 export function getGlobalSafetyLimits() {
-  const dailyRequestLimit = parseInt(process.env.DAILY_AI_REQUEST_LIMIT || "10000", 10);
-  const dailyFreeCreditLimit = parseInt(process.env.DAILY_FREE_AI_CREDIT_LIMIT || "50000", 10);
+  const reqEnv = process.env.DAILY_AI_REQUEST_LIMIT?.trim();
+  const freeEnv = process.env.DAILY_FREE_AI_CREDIT_LIMIT?.trim();
+
+  let dailyRequestLimit = reqEnv ? parseInt(reqEnv, 10) : 10000;
+  let dailyFreeCreditLimit = freeEnv ? parseInt(freeEnv, 10) : 50000;
+
+  if (isNaN(dailyRequestLimit) || dailyRequestLimit <= 0) {
+    dailyRequestLimit = 10000;
+  }
+  if (isNaN(dailyFreeCreditLimit) || dailyFreeCreditLimit <= 0) {
+    dailyFreeCreditLimit = 50000;
+  }
+
   return {
-    dailyRequestLimit: isNaN(dailyRequestLimit) ? 10000 : dailyRequestLimit,
-    dailyFreeCreditLimit: isNaN(dailyFreeCreditLimit) ? 50000 : dailyFreeCreditLimit
+    dailyRequestLimit,
+    dailyFreeCreditLimit
   };
+}
+
+// Log resolved limits at startup without secrets (Requirement 5)
+const startupLimits = getGlobalSafetyLimits();
+console.log(`[AI Gateway] Global limits initialized: dailyRequestLimit=${startupLimits.dailyRequestLimit}, dailyFreeCreditLimit=${startupLimits.dailyFreeCreditLimit}`);
+
+export function isProductionEnvironment(): boolean {
+  return process.env.NODE_ENV === "production" || process.env.VERCEL === "1";
 }
 
 // Global in-memory accounting counters for emergency safety check across server lifespan
@@ -375,6 +394,20 @@ export async function reserveCredits(
   const today = getTashkentDateString();
 
   if (!dbAdmin || isFirestoreAdminAuthorized === false) {
+    if (isProductionEnvironment()) {
+      return {
+        allowed: false,
+        error: "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
+        code: "CREDIT_STORAGE_UNAVAILABLE",
+        requestId,
+        creditCost,
+        creditsRemaining: 0,
+        creditsDailyLimit: 10,
+        creditsUsedToday: 0,
+        resetDate: today,
+        tier: "free"
+      };
+    }
     return reserveFallbackCredits(userId, operation, modelName, requestId, creditCost, today);
   }
 
@@ -394,22 +427,40 @@ export async function reserveCredits(
         userData = userSnap.data() || {};
       }
 
-      const tier = userData.subscriptionTier || "free";
-      const dailyLimit = userData.aiCreditsDailyLimit || DEFAULT_TIER_LIMITS[tier] || 10;
+      const tier = (userData.subscriptionTier === "pro" || userData.subscriptionTier === "business") ? userData.subscriptionTier : "free";
+      const expectedLimit = DEFAULT_TIER_LIMITS[tier] || 10;
+      let dailyLimit = Number(userData.aiCreditsDailyLimit);
+      if (isNaN(dailyLimit) || dailyLimit <= 0) {
+        dailyLimit = expectedLimit;
+      }
 
-      let usedToday = userData.aiCreditsUsedToday ?? 0;
-      let remaining = userData.aiCreditsRemaining ?? dailyLimit;
-      let resetDate = userData.aiCreditResetDate || today;
-      let lifetimeUsed = userData.lifetimeAiCreditsUsed || 0;
+      let usedToday = Number(userData.aiCreditsUsedToday);
+      if (isNaN(usedToday) || usedToday < 0) {
+        usedToday = 0;
+      }
 
-      // Lazy Daily Reset (Asia/Tashkent)
+      let remaining = Number(userData.aiCreditsRemaining);
+      if (isNaN(remaining) || remaining < 0) {
+        remaining = Math.max(0, dailyLimit - usedToday);
+      }
+      if (remaining > dailyLimit) {
+        remaining = dailyLimit;
+      }
+
+      let resetDate = typeof userData.aiCreditResetDate === "string" ? userData.aiCreditResetDate : "";
+      let lifetimeUsed = Number(userData.lifetimeAiCreditsUsed);
+      if (isNaN(lifetimeUsed) || lifetimeUsed < 0) {
+        lifetimeUsed = 0;
+      }
+
+      // Lazy Daily Reset (Asia/Tashkent) - requirement 4: Free users initialize with 10 remaining, 0 used
       if (resetDate !== today) {
         usedToday = 0;
         remaining = dailyLimit;
         resetDate = today;
       }
 
-      // Check global safety limits
+      // Check global safety limits first
       const safety = checkGlobalSafetyLimits(tier, creditCost);
       if (!safety.allowed) {
         return {
@@ -426,7 +477,7 @@ export async function reserveCredits(
         };
       }
 
-      // Check if user has sufficient credits
+      // Requirement 4: ONLY return AI_CREDIT_LIMIT when creditsRemaining < creditCost before reservation
       if (remaining < creditCost) {
         return {
           allowed: false,
@@ -514,8 +565,23 @@ export async function reserveCredits(
     return result;
   } catch (txErr: any) {
     if (isPermissionDeniedError(txErr)) {
-      console.warn("[AI Gateway] Firestore Admin lacks credentials in this runtime (7 PERMISSION_DENIED). Resilient in-memory credit ledger activated.");
       isFirestoreAdminAuthorized = false;
+      if (isProductionEnvironment()) {
+        console.error("[AI Gateway] Firestore Admin lacks credentials in production (7 PERMISSION_DENIED). Returning CREDIT_STORAGE_UNAVAILABLE.");
+        return {
+          allowed: false,
+          error: "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
+          code: "CREDIT_STORAGE_UNAVAILABLE",
+          requestId,
+          creditCost,
+          creditsRemaining: 0,
+          creditsDailyLimit: 10,
+          creditsUsedToday: 0,
+          resetDate: today,
+          tier: "free"
+        };
+      }
+      console.warn("[AI Gateway] Firestore Admin lacks credentials in development runtime (7 PERMISSION_DENIED). Resilient in-memory credit ledger activated.");
       return reserveFallbackCredits(userId, operation, modelName, requestId, creditCost, today);
     }
 
@@ -661,10 +727,24 @@ export async function getUserCreditStatus(
   resetDate: string;
   tier: string;
   lifetimeUsed: number;
+  error?: string;
+  code?: string;
 }> {
   const today = getTashkentDateString();
 
   if (!dbAdmin || isFirestoreAdminAuthorized === false) {
+    if (isProductionEnvironment()) {
+      return {
+        creditsRemaining: 0,
+        creditsDailyLimit: 10,
+        creditsUsedToday: 0,
+        resetDate: today,
+        tier: "free",
+        lifetimeUsed: 0,
+        error: "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
+        code: "CREDIT_STORAGE_UNAVAILABLE"
+      };
+    }
     return getFallbackUserCreditStatus(userId, today);
   }
 
@@ -684,11 +764,27 @@ export async function getUserCreditStatus(
     }
 
     const data = snap.data() || {};
-    const tier = data.subscriptionTier || "free";
-    const dailyLimit = data.aiCreditsDailyLimit || DEFAULT_TIER_LIMITS[tier] || 10;
-    let usedToday = data.aiCreditsUsedToday ?? 0;
-    let remaining = data.aiCreditsRemaining ?? dailyLimit;
-    let resetDate = data.aiCreditResetDate || today;
+    const tier = (data.subscriptionTier === "pro" || data.subscriptionTier === "business") ? data.subscriptionTier : "free";
+    const expectedLimit = DEFAULT_TIER_LIMITS[tier] || 10;
+    let dailyLimit = Number(data.aiCreditsDailyLimit);
+    if (isNaN(dailyLimit) || dailyLimit <= 0) {
+      dailyLimit = expectedLimit;
+    }
+
+    let usedToday = Number(data.aiCreditsUsedToday);
+    if (isNaN(usedToday) || usedToday < 0) {
+      usedToday = 0;
+    }
+
+    let remaining = Number(data.aiCreditsRemaining);
+    if (isNaN(remaining) || remaining < 0) {
+      remaining = Math.max(0, dailyLimit - usedToday);
+    }
+    if (remaining > dailyLimit) {
+      remaining = dailyLimit;
+    }
+
+    let resetDate = typeof data.aiCreditResetDate === "string" ? data.aiCreditResetDate : "";
 
     if (resetDate !== today) {
       usedToday = 0;
@@ -697,6 +793,7 @@ export async function getUserCreditStatus(
 
       // Lazy update
       userRef.update({
+        aiCreditsDailyLimit: dailyLimit,
         aiCreditsUsedToday: 0,
         aiCreditsRemaining: dailyLimit,
         aiCreditResetDate: today,
@@ -710,12 +807,25 @@ export async function getUserCreditStatus(
       creditsUsedToday: usedToday,
       resetDate,
       tier,
-      lifetimeUsed: data.lifetimeAiCreditsUsed || 0
+      lifetimeUsed: Number(data.lifetimeAiCreditsUsed) || 0
     };
   } catch (err: any) {
     if (isPermissionDeniedError(err)) {
-      console.warn("[AI Gateway] Firestore Admin lacks credentials (7 PERMISSION_DENIED). Using in-memory credits.");
       isFirestoreAdminAuthorized = false;
+      if (isProductionEnvironment()) {
+        console.error(`[AI Gateway] Firestore Admin lacks credentials in production (7 PERMISSION_DENIED) for ${userId}.`);
+        return {
+          creditsRemaining: 0,
+          creditsDailyLimit: 10,
+          creditsUsedToday: 0,
+          resetDate: today,
+          tier: "free",
+          lifetimeUsed: 0,
+          error: "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
+          code: "CREDIT_STORAGE_UNAVAILABLE"
+        };
+      }
+      console.warn("[AI Gateway] Firestore Admin lacks credentials (7 PERMISSION_DENIED). Using in-memory credits.");
       return getFallbackUserCreditStatus(userId, today);
     }
     console.error(`[AI Gateway] Failed to read credits for ${userId}:`, err.message);

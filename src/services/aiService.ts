@@ -182,11 +182,47 @@ export async function callAIServer(params: {
         );
       }
 
-      // Credit limit exceeded
-      if (errorCode === "AI_CREDIT_LIMIT" || originalStatus === 429) {
+      // 1. User credit limit exhausted (ONLY when code is AI_CREDIT_LIMIT, never based on status 429 alone)
+      if (errorCode === "AI_CREDIT_LIMIT") {
         throw new AIServerError(
           errorMessage || "Bugungi bepul AI limitingiz tugadi. AI kreditlaringiz ertaga yangilanadi.",
           429,
+          errorData
+        );
+      }
+
+      // 2. Global platform safety limit reached
+      if (errorCode === "GLOBAL_SAFETY_LIMIT") {
+        throw new AIServerError(
+          errorMessage || "Dastyorchi platformasining bugungi umumiy xizmat ko'rsatish limiti yetildi. Iltimos, keyinroq qayta urinib ko'ring.",
+          429,
+          errorData
+        );
+      }
+
+      // 3. Provider rate limit (Gemini/provider quota or RPM/TPM/RPD limit reached)
+      if (errorCode === "PROVIDER_RATE_LIMIT") {
+        throw new AIServerError(
+          errorMessage || "AI provayderining vaqtinchalik limiti tugadi. Kreditlaringiz hisobingizda saqlab qolindi.",
+          429,
+          errorData
+        );
+      }
+
+      // 4. Concurrency lock / in-flight request
+      if (errorCode === "CONCURRENT_REQUEST" || originalStatus === 409) {
+        throw new AIServerError(
+          errorMessage || "Oldingi so'rovingiz hali bajarilmoqda. Iltimos, uning yakunlanishini kuting.",
+          409,
+          errorData
+        );
+      }
+
+      // 5. Credit storage unavailable
+      if (errorCode === "CREDIT_STORAGE_UNAVAILABLE") {
+        throw new AIServerError(
+          errorMessage || "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
+          503,
           errorData
         );
       }
@@ -218,7 +254,8 @@ export async function callAIServer(params: {
         );
       }
 
-      const isOverloaded = originalStatus === 503 || errorCode === "SERVER_ERROR" || errorCode === "PROVIDER_RATE_LIMIT";
+      // Transient 503 overload retries
+      const isOverloaded = originalStatus === 503 && errorCode !== "CREDIT_STORAGE_UNAVAILABLE" && errorCode !== "AI_CONFIGURATION_ERROR" && errorCode !== "MODEL_NOT_AVAILABLE";
 
       if (isOverloaded) {
           if (attempts < maxRetries) {
@@ -232,6 +269,15 @@ export async function callAIServer(params: {
           } else {
               throw new AIServerError(errorMessage || "Hozirda AI serverlarida yuqori yuklama kuzatilmoqda. Iltimos, bir necha daqiqadan so'ng qayta urinib ko'ring.", 503, errorData);
           }
+      }
+
+      // Unclassified 429 fallback without assuming user credit limit
+      if (originalStatus === 429) {
+        throw new AIServerError(
+          errorMessage || "AI serverida vaqtinchalik yuqori yuklama (Rate Limit). Iltimos, birozdan so'ng qayta urinib ko'ring.",
+          429,
+          errorData
+        );
       }
       
       if (errorCode === "PAYLOAD_TOO_LARGE" || originalStatus === 413) {

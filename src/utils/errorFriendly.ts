@@ -53,11 +53,35 @@ export function classifyError(error: any): { type: string; friendlyMessage: stri
     };
   }
 
-  if (code === "PROVIDER_RATE_LIMIT" || status === 429) {
+  if (code === "GLOBAL_SAFETY_LIMIT") {
+    return {
+      type: "global safety limit",
+      friendlyMessage: "Platformaning bugungi umumiy xizmat ko'rsatish limiti yetildi. Iltimos, keyinroq qayta urinib ko'ring.",
+      code: "GLOBAL_SAFETY_LIMIT"
+    };
+  }
+
+  if (code === "PROVIDER_RATE_LIMIT" || (status === 429 && !code)) {
     return {
       type: "rate limit",
-      friendlyMessage: "AI serverlarida vaqtinchalik yuqori yuklama (Rate Limit). Kreditlaringiz qaytarildi, birozdan so'ng qayta urinib ko'ring.",
+      friendlyMessage: "AI provayderining vaqtinchalik limiti tugadi. Kreditlaringiz hisobingizda saqlab qolindi.",
       code: "PROVIDER_RATE_LIMIT"
+    };
+  }
+
+  if (code === "CONCURRENT_REQUEST" || status === 409) {
+    return {
+      type: "concurrent request",
+      friendlyMessage: "Oldingi so'rovingiz hali bajarilmoqda. Iltimos, uning yakunlanishini kuting.",
+      code: "CONCURRENT_REQUEST"
+    };
+  }
+
+  if (code === "CREDIT_STORAGE_UNAVAILABLE") {
+    return {
+      type: "database error",
+      friendlyMessage: "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
+      code: "CREDIT_STORAGE_UNAVAILABLE"
     };
   }
 
@@ -171,8 +195,14 @@ export function getFriendlyErrorMessage(error: any, lang: string = "uz_lat"): st
         return "Ошибка аутентификации у провайдера ИИ (неверный GEMINI_API_KEY). Ваши кредиты возвращены.";
       case "AI_CREDIT_LIMIT":
         return "Ваш дневной лимит ИИ кредитов исчерпан. Кредиты обновятся завтра.";
+      case "GLOBAL_SAFETY_LIMIT":
+        return "Достигнут суточный лимит запросов платформы Dastyorchi. Пожалуйста, попробуйте позже.";
       case "PROVIDER_RATE_LIMIT":
-        return "Временная перегрузка серверов ИИ (Rate Limit). Ваши кредиты возвращены, попробуйте чуть позже.";
+        return "Временный лимит провайдера ИИ исчерпан. Ваши кредиты сохранены на балансе, попробуйте чуть позже.";
+      case "CONCURRENT_REQUEST":
+        return "Ваш предыдущий запрос еще выполняется. Пожалуйста, дождитесь его завершения.";
+      case "CREDIT_STORAGE_UNAVAILABLE":
+        return "Ошибка базы данных (недостаточно прав Firestore). Пожалуйста, обратитесь к администратору.";
       case "FIRESTORE_ERROR":
         return "Ошибка базы данных. Ваши кредиты возвращены.";
       case "CONTEXT_OVERFLOW":
@@ -202,8 +232,14 @@ export function getFriendlyErrorMessage(error: any, lang: string = "uz_lat"): st
         return "AI provider authentication failed (invalid GEMINI_API_KEY). Credits refunded.";
       case "AI_CREDIT_LIMIT":
         return "Daily AI credit limit reached. Your credits will reset tomorrow.";
+      case "GLOBAL_SAFETY_LIMIT":
+        return "Dastyorchi platform daily request safety limit reached. Please try again later.";
       case "PROVIDER_RATE_LIMIT":
-        return "Temporary AI provider rate limit. Credits refunded, please try again shortly.";
+        return "Temporary AI provider rate limit reached. Credits preserved on your balance, please try again shortly.";
+      case "CONCURRENT_REQUEST":
+        return "Your previous request is still in progress. Please wait for it to finish.";
+      case "CREDIT_STORAGE_UNAVAILABLE":
+        return "Database storage unavailable (insufficient Firestore permissions). Please contact administrator.";
       case "FIRESTORE_ERROR":
         return "Database persistence error occurred. Credits refunded.";
       case "CONTEXT_OVERFLOW":
