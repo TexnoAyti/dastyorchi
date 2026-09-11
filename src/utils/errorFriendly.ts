@@ -5,6 +5,14 @@ export function classifyError(error: any): { type: string; friendlyMessage: stri
   const status = error?.status || error?.statusCode || 0;
 
   // 1. Explicit backend error codes
+  if (code === "CUSTOM_TOKEN_MISMATCH" || code === "auth/custom-token-mismatch" || errMsgLower.includes("custom-token-mismatch")) {
+    return {
+      type: "auth error",
+      friendlyMessage: "Firebase loyihasi backend bilan mos emas. Ilova konfiguratsiyasini tekshiring.",
+      code: "CUSTOM_TOKEN_MISMATCH"
+    };
+  }
+
   if (code === "SESSION_EXPIRED") {
     return {
       type: "session expired",
@@ -191,6 +199,8 @@ export function getFriendlyErrorMessage(error: any, lang: string = "uz_lat"): st
 
   if (lang === "ru") {
     switch (code) {
+      case "CUSTOM_TOKEN_MISMATCH":
+        return "Проект Firebase не совпадает с сервером. Пожалуйста, проверьте конфигурацию приложения.";
       case "SESSION_EXPIRED":
         return "Срок действия вашей сессии истек. Пожалуйста, войдите снова.";
       case "AUTH_REQUIRED":
@@ -230,6 +240,8 @@ export function getFriendlyErrorMessage(error: any, lang: string = "uz_lat"): st
 
   if (lang === "en") {
     switch (code) {
+      case "CUSTOM_TOKEN_MISMATCH":
+        return "Firebase project does not match backend. Please check application configuration.";
       case "SESSION_EXPIRED":
         return "Your session has expired. Please sign in again.";
       case "AUTH_REQUIRED":

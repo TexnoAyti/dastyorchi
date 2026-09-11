@@ -874,7 +874,7 @@ try {
         console.error(`[FirebaseAdmin] Production Firebase Admin credentials unavailable: ${sa.error || "missing key"}. ADC fallback disabled.`);
       }
     } else {
-      const devProjectId = expectedFrontendProjectId || "pure-wording-pf6jr";
+      const devProjectId = expectedFrontendProjectId || process.env.FIREBASE_PROJECT_ID?.trim() || "dastyorchi";
       if (!adminApp && admin.apps.length === 0 && devProjectId) {
         try {
           adminApp = admin.initializeApp({ projectId: devProjectId });

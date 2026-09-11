@@ -1,7 +1,6 @@
-import { getStorage, ref, uploadString, getDownloadURL, deleteObject } from "firebase/storage";
-import { app } from "../firebase";
+import { ref, uploadString, getDownloadURL, deleteObject } from "firebase/storage";
+import { storage } from "../firebase";
 
-const storage = getStorage(app);
 // Reduce retry time to fail fast (2 seconds) if Firebase Storage is uninitialized or blocking
 storage.maxUploadRetryTime = 2000; 
 storage.maxOperationRetryTime = 2000;

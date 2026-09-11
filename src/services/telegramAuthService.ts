@@ -92,7 +92,13 @@ export async function authenticateWithTelegramInitData(initData: string): Promis
       console.log("[TelegramAuth] Firebase signInWithCustomToken: SUCCESS");
       console.log("[TelegramAuth] Firebase UID:", auth.currentUser?.uid);
     } catch (firebaseErr: any) {
-      console.error("[TelegramAuth] Firebase signInWithCustomToken FAILED:", firebaseErr.message);
+      console.error("[TelegramAuth] Firebase signInWithCustomToken FAILED:", firebaseErr?.code || firebaseErr?.message);
+      if (
+        firebaseErr?.code === "auth/custom-token-mismatch" ||
+        firebaseErr?.message?.includes("custom-token-mismatch")
+      ) {
+        throw new Error("Firebase loyihasi backend bilan mos emas. Ilova konfiguratsiyasini tekshiring.");
+      }
       throw new Error("Firebase avtorizatsiyasida xatolik: " + (firebaseErr.message || ""));
     }
   } else {
@@ -147,7 +153,13 @@ export async function devLoginBypass(): Promise<AuthResponse> {
       await signInWithCustomToken(auth, data.firebaseCustomToken);
       console.log("[TelegramAuth] Dev Firebase signInWithCustomToken: SUCCESS, UID:", auth.currentUser?.uid);
     } catch (firebaseErr: any) {
-      console.warn("Dev Firebase signInWithCustomToken notice:", firebaseErr.message);
+      console.warn("Dev Firebase signInWithCustomToken notice:", firebaseErr?.code || firebaseErr?.message);
+      if (
+        firebaseErr?.code === "auth/custom-token-mismatch" ||
+        firebaseErr?.message?.includes("custom-token-mismatch")
+      ) {
+        throw new Error("Firebase loyihasi backend bilan mos emas. Ilova konfiguratsiyasini tekshiring.");
+      }
     }
   }
 

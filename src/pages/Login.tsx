@@ -21,7 +21,14 @@ export function Login({ onLoginSuccess }: LoginProps) {
         window.location.href = "/";
       }
     } catch (err: any) {
-      setErrorMessage(err.message || "Test hisobiga kirishda xatolik yuz berdi");
+      const isMismatch = 
+        err?.message?.includes("custom-token-mismatch") ||
+        err?.code === "auth/custom-token-mismatch" ||
+        err?.message?.includes("Firebase loyihasi backend bilan mos emas");
+      const displayError = isMismatch
+        ? "Firebase loyihasi backend bilan mos emas. Ilova konfiguratsiyasini tekshiring."
+        : (err.message || "Test hisobiga kirishda xatolik yuz berdi");
+      setErrorMessage(displayError);
     } finally {
       setDevLoading(false);
     }

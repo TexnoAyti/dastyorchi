@@ -216,7 +216,14 @@ export default function App() {
           }
         } catch (err: any) {
           console.error("[TelegramAuth] Telegram initData authentication error:", err);
-          setAuthError(err.message || "Telegram avtorizatsiyasida xatolik yuz berdi");
+          const isMismatch = 
+            err?.message?.includes("custom-token-mismatch") ||
+            err?.code === "auth/custom-token-mismatch" ||
+            err?.message?.includes("Firebase loyihasi backend bilan mos emas");
+          const displayError = isMismatch
+            ? "Firebase loyihasi backend bilan mos emas. Ilova konfiguratsiyasini tekshiring."
+            : (err.message || "Telegram avtorizatsiyasida xatolik yuz berdi");
+          setAuthError(displayError);
           setLoading(false);
           return;
         }
@@ -287,7 +294,14 @@ export default function App() {
         setUser(result.user);
       }
     } catch (err: any) {
-      setAuthError(err.message || "Dev login xatoligi");
+      const isMismatch = 
+        err?.message?.includes("custom-token-mismatch") ||
+        err?.code === "auth/custom-token-mismatch" ||
+        err?.message?.includes("Firebase loyihasi backend bilan mos emas");
+      const displayError = isMismatch
+        ? "Firebase loyihasi backend bilan mos emas. Ilova konfiguratsiyasini tekshiring."
+        : (err.message || "Dev login xatoligi");
+      setAuthError(displayError);
     } finally {
       setDevLoading(false);
     }
