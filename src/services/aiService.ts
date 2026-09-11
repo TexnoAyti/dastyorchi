@@ -218,10 +218,10 @@ export async function callAIServer(params: {
         );
       }
 
-      // 5. Credit storage unavailable
-      if (errorCode === "CREDIT_STORAGE_UNAVAILABLE") {
+      // 5. Firebase Admin / Credit storage unavailable
+      if (errorCode === "FIREBASE_ADMIN_UNAVAILABLE" || errorCode === "CREDIT_STORAGE_UNAVAILABLE") {
         throw new AIServerError(
-          errorMessage || "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
+          errorMessage || "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan.",
           503,
           errorData
         );
@@ -255,7 +255,7 @@ export async function callAIServer(params: {
       }
 
       // Transient 503 overload retries
-      const isOverloaded = originalStatus === 503 && errorCode !== "CREDIT_STORAGE_UNAVAILABLE" && errorCode !== "AI_CONFIGURATION_ERROR" && errorCode !== "MODEL_NOT_AVAILABLE";
+      const isOverloaded = originalStatus === 503 && errorCode !== "FIREBASE_ADMIN_UNAVAILABLE" && errorCode !== "CREDIT_STORAGE_UNAVAILABLE" && errorCode !== "AI_CONFIGURATION_ERROR" && errorCode !== "MODEL_NOT_AVAILABLE";
 
       if (isOverloaded) {
           if (attempts < maxRetries) {

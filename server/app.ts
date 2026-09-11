@@ -22,7 +22,8 @@ import {
   refundAiUsage,
   getUserCreditStatus,
   getAiAnalytics,
-  ReservationResult
+  ReservationResult,
+  isProductionEnvironment
 } from "./aiGateway";
 
 dotenv.config();
@@ -30,93 +31,238 @@ dotenv.config();
 // ==========================================
 // 1. FIREBASE ADMIN PRODUCTION INITIALIZATION
 // ==========================================
+export interface FirebaseAdminState {
+  initialized: boolean;
+  credentialMode: "service_account_cert" | "development_fallback" | "none";
+  firestoreReady: boolean;
+  projectId?: string;
+  clientEmail?: string;
+  error?: string;
+}
+
+export const firebaseAdminState: FirebaseAdminState = {
+  initialized: false,
+  credentialMode: "none",
+  firestoreReady: false
+};
+
 let dbAdmin: FirebaseFirestore.Firestore | null = null;
 let firebaseInitStatus = "not_initialized";
 
+interface ParsedServiceAccount {
+  valid: boolean;
+  configured: boolean;
+  parsed: boolean;
+  data?: any;
+  error?: string;
+}
+
+function parseAndValidateServiceAccount(rawEnv: string | undefined): ParsedServiceAccount {
+  if (!rawEnv || !rawEnv.trim()) {
+    return { valid: false, configured: false, parsed: false, error: "FIREBASE_SERVICE_ACCOUNT_KEY not set" };
+  }
+
+  let str = rawEnv.trim();
+  // Strip outer quotes if mistakenly passed in env (e.g. from env files or Vercel UI)
+  if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
+    str = str.slice(1, -1).trim();
+  }
+
+  let parsedObj: any = null;
+  // Attempt 1: Raw JSON
+  try {
+    parsedObj = JSON.parse(str);
+  } catch (e1) {
+    // Attempt 2: Base64-encoded JSON
+    try {
+      const decoded = Buffer.from(str, "base64").toString("utf-8").trim();
+      parsedObj = JSON.parse(decoded);
+    } catch (e2: any) {
+      return { valid: false, configured: true, parsed: false, error: "Failed to parse JSON (checked raw and base64)" };
+    }
+  }
+
+  if (!parsedObj || typeof parsedObj !== "object") {
+    return { valid: false, configured: true, parsed: false, error: "Service account is not a valid JSON object" };
+  }
+
+  // Validate required fields
+  const { type, project_id, private_key, client_email } = parsedObj;
+  const missing: string[] = [];
+  if (!type) missing.push("type");
+  if (!project_id) missing.push("project_id");
+  if (!private_key) missing.push("private_key");
+  if (!client_email) missing.push("client_email");
+
+  if (missing.length > 0) {
+    return {
+      valid: false,
+      configured: true,
+      parsed: true,
+      data: parsedObj,
+      error: `Missing required service account fields: ${missing.join(", ")}`
+    };
+  }
+
+  // Normalize private key escaped newlines
+  if (typeof private_key === "string") {
+    parsedObj.private_key = private_key.replace(/\\n/g, "\n");
+  }
+
+  return { valid: true, configured: true, parsed: true, data: parsedObj };
+}
+
+// Read expected project ID from frontend config or explicit env
+const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+let expectedFrontendProjectId: string | undefined = process.env.FIREBASE_PROJECT_ID?.trim();
+let configuredDatabaseId: string | undefined = process.env.FIRESTORE_DATABASE_ID?.trim();
+
+if (fs.existsSync(configPath)) {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    if (!expectedFrontendProjectId && cfg.projectId) {
+      expectedFrontendProjectId = cfg.projectId.trim();
+    }
+    if (!configuredDatabaseId && cfg.firestoreDatabaseId) {
+      configuredDatabaseId = cfg.firestoreDatabaseId.trim();
+    }
+  } catch (e) {}
+}
+
 try {
+  const isProd = isProductionEnvironment();
+  const rawKeyEnv = process.env.FIREBASE_SERVICE_ACCOUNT_KEY?.trim();
+  const sa = parseAndValidateServiceAccount(rawKeyEnv);
+
+  const isConfigured = sa.configured;
+  const isParsed = sa.parsed;
+  const saProjectId = sa.data?.project_id || "none";
+  const isClientEmailConfigured = Boolean(sa.data?.client_email);
+
+  // Diagnostic logging (Requirement 2):
+  console.log(`[FirebaseAdmin] FIREBASE_SERVICE_ACCOUNT_KEY configured: ${isConfigured ? "yes" : "no"}`);
+  console.log(`[FirebaseAdmin] service account parsed: ${isParsed ? "yes" : "no"}`);
+  console.log(`[FirebaseAdmin] project id: ${sa.valid ? saProjectId : (expectedFrontendProjectId || "none")}`);
+  console.log(`[FirebaseAdmin] client email configured: ${isClientEmailConfigured ? "yes" : "no"}`);
+
+  // Project ID Match check (Requirement 5):
+  let projectMismatch = false;
+  if (sa.valid && sa.data) {
+    const candidateProjectId = sa.data.project_id;
+    // Check against FIREBASE_PROJECT_ID if explicitly configured
+    if (process.env.FIREBASE_PROJECT_ID?.trim() && process.env.FIREBASE_PROJECT_ID.trim() !== candidateProjectId) {
+      console.error(`[FirebaseAdmin] PROJECT_ID_MISMATCH`);
+      console.error(`[FirebaseAdmin] service account project_id (${candidateProjectId}) does not match FIREBASE_PROJECT_ID (${process.env.FIREBASE_PROJECT_ID.trim()})`);
+      projectMismatch = true;
+    }
+    // Check against frontend project ID
+    if (expectedFrontendProjectId && expectedFrontendProjectId !== candidateProjectId) {
+      console.error(`[FirebaseAdmin] PROJECT_ID_MISMATCH`);
+      console.error(`[FirebaseAdmin] service account project_id (${candidateProjectId}) does not match frontend project (${expectedFrontendProjectId})`);
+      projectMismatch = true;
+    }
+  }
+
   let adminApp: admin.app.App | null = null;
 
-  if (admin.apps.length > 0) {
-    adminApp = admin.apps[0]!;
-    firebaseInitStatus = "reused_existing_app";
-  } else if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+  if (sa.valid && !projectMismatch) {
     try {
-      let rawKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY.trim();
-      // Handle base64 encoded JSON string if provided
-      if (!rawKey.startsWith("{") && !rawKey.startsWith('"')) {
-        try {
-          const decoded = Buffer.from(rawKey, "base64").toString("utf-8");
-          if (decoded.startsWith("{")) {
-            rawKey = decoded;
-          }
-        } catch (e) {}
+      if (admin.apps.length > 0) {
+        adminApp = admin.apps[0]!;
+      } else {
+        adminApp = admin.initializeApp({
+          credential: admin.credential.cert(sa.data),
+          projectId: sa.data.project_id
+        });
       }
 
-      const serviceAccount = JSON.parse(rawKey);
-      if (serviceAccount.private_key) {
-        // Handle escaped newlines in private key string
-        serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
+      if (configuredDatabaseId && configuredDatabaseId !== "(default)") {
+        dbAdmin = getFirestore(adminApp, configuredDatabaseId);
+      } else {
+        dbAdmin = getFirestore(adminApp);
       }
 
-      adminApp = admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-        projectId: serviceAccount.project_id || process.env.FIREBASE_PROJECT_ID
-      });
+      firebaseAdminState.initialized = true;
+      firebaseAdminState.credentialMode = "service_account_cert";
+      firebaseAdminState.firestoreReady = true;
+      firebaseAdminState.projectId = sa.data.project_id;
+      firebaseAdminState.clientEmail = sa.data.client_email;
       firebaseInitStatus = "service_account_cert";
-      console.log("[FirebaseAdmin] Successfully initialized with FIREBASE_SERVICE_ACCOUNT_KEY");
-    } catch (parseErr: any) {
-      console.error("[FirebaseAdmin] Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY:", parseErr.message);
+
+      console.log(`[FirebaseAdmin] credential mode: service_account_cert`);
+      console.log(`[FirebaseAdmin] initialization: success`);
+      console.log(`[FirebaseAdmin] Firestore ready. Target database: ${configuredDatabaseId || "(default)"}`);
+    } catch (initErr: any) {
+      console.error("[FirebaseAdmin] Initialization error:", initErr.message);
+      firebaseAdminState.initialized = false;
+      firebaseAdminState.credentialMode = "none";
+      firebaseAdminState.firestoreReady = false;
+      firebaseAdminState.error = initErr.message;
+      firebaseInitStatus = "error: " + initErr.message;
+      console.log(`[FirebaseAdmin] credential mode: service_account_cert`);
+      console.log(`[FirebaseAdmin] initialization: failure`);
     }
-  }
+  } else {
+    // Service account invalid or missing or project mismatch
+    if (isProd) {
+      // In production (Vercel), NEVER attempt ADC or project-id-only initialization
+      firebaseAdminState.initialized = false;
+      firebaseAdminState.credentialMode = "none";
+      firebaseAdminState.firestoreReady = false;
+      firebaseAdminState.error = projectMismatch
+        ? "PROJECT_ID_MISMATCH"
+        : (sa.error || "FIREBASE_SERVICE_ACCOUNT_KEY missing or invalid");
+      firebaseInitStatus = "unavailable: " + firebaseAdminState.error;
+      dbAdmin = null;
 
-  // Fallback if service account key is not provided (e.g. local environment or AI Studio Cloud Run)
-  if (!adminApp && admin.apps.length === 0) {
-    const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-    let projectId = process.env.FIREBASE_PROJECT_ID;
-
-    if (fs.existsSync(configPath)) {
-      try {
-        const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-        projectId = projectId || config.projectId;
-      } catch (e) {}
-    }
-
-    if (projectId) {
-      try {
-        adminApp = admin.initializeApp({ projectId });
-        firebaseInitStatus = "project_id_fallback";
-        console.log(`[FirebaseAdmin] Initialized fallback with projectId: ${projectId}`);
-      } catch (e: any) {
-        console.warn("[FirebaseAdmin] Fallback init warning:", e.message);
+      console.log(`[FirebaseAdmin] credential mode: none`);
+      console.log(`[FirebaseAdmin] initialization: failure`);
+      if (projectMismatch) {
+        console.error("[FirebaseAdmin] PROJECT_ID_MISMATCH - Production Firebase Admin initialization aborted.");
+      } else {
+        console.error(`[FirebaseAdmin] Production Firebase Admin credentials unavailable: ${sa.error || "missing key"}. ADC fallback disabled.`);
       }
-    }
-  }
-
-  // Connect Firestore instance
-  if (admin.apps.length > 0) {
-    const currentApp = admin.apps[0]!;
-    let databaseId = process.env.FIRESTORE_DATABASE_ID;
-
-    if (!databaseId) {
-      const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-      if (fs.existsSync(configPath)) {
-        try {
-          const cfg = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-          databaseId = cfg.firestoreDatabaseId;
-        } catch (e) {}
-      }
-    }
-
-    if (databaseId && databaseId !== "(default)") {
-      dbAdmin = getFirestore(currentApp, databaseId);
     } else {
-      dbAdmin = getFirestore(currentApp);
+      // Development-only fallback (e.g. AI Studio container with Cloud Run IAM credentials)
+      const devProjectId = expectedFrontendProjectId || "pure-wording-pf6jr";
+      if (!adminApp && admin.apps.length === 0 && devProjectId) {
+        try {
+          adminApp = admin.initializeApp({ projectId: devProjectId });
+          if (configuredDatabaseId && configuredDatabaseId !== "(default)") {
+            dbAdmin = getFirestore(adminApp, configuredDatabaseId);
+          } else {
+            dbAdmin = getFirestore(adminApp);
+          }
+          firebaseAdminState.initialized = true;
+          firebaseAdminState.credentialMode = "development_fallback";
+          firebaseAdminState.firestoreReady = true;
+          firebaseAdminState.projectId = devProjectId;
+          firebaseInitStatus = "development_fallback";
+          console.log(`[FirebaseAdmin] credential mode: development_fallback`);
+          console.log(`[FirebaseAdmin] initialization: success (dev fallback)`);
+        } catch (devErr: any) {
+          console.warn("[FirebaseAdmin] Development fallback init warning:", devErr.message);
+          firebaseAdminState.initialized = false;
+          firebaseAdminState.credentialMode = "none";
+          firebaseAdminState.firestoreReady = false;
+          firebaseAdminState.error = devErr.message;
+          firebaseInitStatus = "error: " + devErr.message;
+          console.log(`[FirebaseAdmin] credential mode: none`);
+          console.log(`[FirebaseAdmin] initialization: failure`);
+        }
+      } else {
+        console.log(`[FirebaseAdmin] credential mode: none`);
+        console.log(`[FirebaseAdmin] initialization: failure`);
+      }
     }
-    console.log("[FirebaseAdmin] Firestore ready. Target database:", databaseId || "(default)");
   }
-} catch (err: any) {
-  console.error("[FirebaseAdmin] Initialization fatal error:", err.message);
-  firebaseInitStatus = "error: " + err.message;
+} catch (fatalErr: any) {
+  console.error("[FirebaseAdmin] Fatal startup error:", fatalErr.message);
+  firebaseAdminState.initialized = false;
+  firebaseAdminState.credentialMode = "none";
+  firebaseAdminState.firestoreReady = false;
+  firebaseAdminState.error = fatalErr.message;
+  firebaseInitStatus = "fatal_error: " + fatalErr.message;
 }
 
 // ==========================================
@@ -360,7 +506,7 @@ export async function authenticateRequestDetails(req: express.Request): Promise<
   let firebaseVerification: "pass" | "fail" | "skipped" = "skipped";
   let firebaseFailReason: "firebase_invalid" | null = null;
 
-  if (admin.apps.length > 0) {
+  if (admin.apps.length > 0 && firebaseAdminState.credentialMode === "service_account_cert") {
     firebaseVerificationAttempted = true;
     try {
       const decoded = await admin.auth().verifyIdToken(token);
@@ -442,7 +588,11 @@ const apiRouter = express.Router();
 apiRouter.get("/health", (req, res) => {
   res.json({
     status: "ok",
-    runtime: "vercel"
+    firebaseAdmin: {
+      initialized: firebaseAdminState.initialized,
+      credentialMode: firebaseAdminState.credentialMode,
+      firestoreReady: firebaseAdminState.firestoreReady
+    }
   });
 });
 
@@ -650,7 +800,7 @@ apiRouter.post("/auth/telegram", async (req, res) => {
 
     // Generate Firebase Custom Token
     let firebaseCustomToken: string | null = null;
-    if (admin.apps.length > 0) {
+    if (admin.apps.length > 0 && firebaseAdminState.credentialMode === "service_account_cert") {
       try {
         const customClaims: Record<string, any> = {
           telegramId,
@@ -810,7 +960,7 @@ apiRouter.post("/auth/dev-login", async (req, res) => {
     });
 
     let firebaseCustomToken: string | null = null;
-    if (admin.apps.length > 0) {
+    if (admin.apps.length > 0 && firebaseAdminState.credentialMode === "service_account_cert") {
       try {
         firebaseCustomToken = await admin.auth().createCustomToken(internalUserId, {
           telegramId: devTelegramId,
@@ -838,6 +988,13 @@ apiRouter.post("/auth/dev-login", async (req, res) => {
 // ------------------------------------------
 apiRouter.get("/ai/credits", async (req, res) => {
   try {
+    if (isProductionEnvironment() && (!dbAdmin || !firebaseAdminState.firestoreReady)) {
+      return res.status(503).json({
+        code: "FIREBASE_ADMIN_UNAVAILABLE",
+        error: "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan."
+      });
+    }
+
     const authInspection = await authenticateRequestDetails(req);
     const userId = authInspection.userId;
     if (!userId) {
@@ -848,11 +1005,17 @@ apiRouter.get("/ai/credits", async (req, res) => {
       });
     }
     const status = await getUserCreditStatus(dbAdmin, userId);
-    if (status.code === "CREDIT_STORAGE_UNAVAILABLE") {
+    if (status.code === "FIREBASE_ADMIN_UNAVAILABLE" || status.code === "CREDIT_STORAGE_UNAVAILABLE") {
       return res.status(503).json(status);
     }
     return res.json(status);
   } catch (err: any) {
+    if (isProductionEnvironment()) {
+      return res.status(503).json({
+        code: "FIREBASE_ADMIN_UNAVAILABLE",
+        error: "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan."
+      });
+    }
     return res.status(500).json({
       error: "Kreditlarni olishda xatolik: " + err.message,
       code: "CREDIT_FETCH_ERROR"
@@ -919,6 +1082,14 @@ apiRouter.post("/ai", async (req, res) => {
     });
   }
 
+  if (isProductionEnvironment() && (!dbAdmin || !firebaseAdminState.firestoreReady)) {
+    console.log("[AI Gateway] final response code: FIREBASE_ADMIN_UNAVAILABLE");
+    return res.status(503).json({
+      error: "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan.",
+      code: "FIREBASE_ADMIN_UNAVAILABLE"
+    });
+  }
+
   const { contents, systemInstruction, config, model } = req.body || {};
   const operation: AIOperation = validateOperation(req.body?.operation);
   const targetModel = resolveModel(operation, model);
@@ -975,11 +1146,11 @@ apiRouter.post("/ai", async (req, res) => {
         });
       }
 
-      if (reservation.code === "CREDIT_STORAGE_UNAVAILABLE") {
-        console.log("[AI Gateway] final response code: CREDIT_STORAGE_UNAVAILABLE");
+      if (reservation.code === "FIREBASE_ADMIN_UNAVAILABLE" || reservation.code === "CREDIT_STORAGE_UNAVAILABLE") {
+        console.log("[AI Gateway] final response code: FIREBASE_ADMIN_UNAVAILABLE");
         return res.status(503).json({
-          error: reservation.error || "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
-          code: "CREDIT_STORAGE_UNAVAILABLE"
+          error: "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan.",
+          code: "FIREBASE_ADMIN_UNAVAILABLE"
         });
       }
 

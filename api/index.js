@@ -43,7 +43,7 @@ function getGlobalSafetyLimits() {
 var startupLimits = getGlobalSafetyLimits();
 console.log(`[AI Gateway] Global limits initialized: dailyRequestLimit=${startupLimits.dailyRequestLimit}, dailyFreeCreditLimit=${startupLimits.dailyFreeCreditLimit}`);
 function isProductionEnvironment() {
-  return process.env.NODE_ENV === "production" || process.env.VERCEL === "1";
+  return process.env.NODE_ENV === "production" || process.env.VERCEL === "1" || Boolean(process.env.VERCEL) || Boolean(process.env.VERCEL_ENV);
 }
 var globalRequestsToday = 0;
 var globalFreeCreditsToday = 0;
@@ -62,11 +62,14 @@ function releaseUserLock(userId) {
 var fallbackUsers = /* @__PURE__ */ new Map();
 var fallbackLedger = /* @__PURE__ */ new Map();
 var isFirestoreAdminAuthorized = null;
-function isPermissionDeniedError(err) {
+function isCredentialOrPermissionError(err) {
   if (!err) return false;
   const code = err.code || err.status;
-  const msg = String(err.message || "");
-  return code === 7 || code === "PERMISSION_DENIED" || msg.includes("PERMISSION_DENIED") || msg.includes("Missing or insufficient permissions");
+  const msg = String(err.message || "").toLowerCase();
+  return code === 7 || code === 16 || code === "PERMISSION_DENIED" || code === "UNAUTHENTICATED" || msg.includes("permission_denied") || msg.includes("permission denied") || msg.includes("missing or insufficient permissions") || msg.includes("could not load the default credentials") || msg.includes("default credentials") || msg.includes("unauthenticated");
+}
+function isPermissionDeniedError(err) {
+  return isCredentialOrPermissionError(err);
 }
 function reserveFallbackCredits(userId, operation, modelName, requestId, creditCost, today) {
   let user = fallbackUsers.get(userId);
@@ -284,8 +287,8 @@ async function reserveCredits(dbAdmin2, userId, operation, modelName) {
     if (isProductionEnvironment()) {
       return {
         allowed: false,
-        error: "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
-        code: "CREDIT_STORAGE_UNAVAILABLE",
+        error: "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan.",
+        code: "FIREBASE_ADMIN_UNAVAILABLE",
         requestId,
         creditCost,
         creditsRemaining: 0,
@@ -429,14 +432,14 @@ async function reserveCredits(dbAdmin2, userId, operation, modelName) {
     }
     return result;
   } catch (txErr) {
-    if (isPermissionDeniedError(txErr)) {
+    if (isCredentialOrPermissionError(txErr)) {
       isFirestoreAdminAuthorized = false;
       if (isProductionEnvironment()) {
-        console.error("[AI Gateway] Firestore Admin lacks credentials in production (7 PERMISSION_DENIED). Returning CREDIT_STORAGE_UNAVAILABLE.");
+        console.error("[AI Gateway] Firestore Admin lacks credentials/permission in production:", txErr.message);
         return {
           allowed: false,
-          error: "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
-          code: "CREDIT_STORAGE_UNAVAILABLE",
+          error: "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan.",
+          code: "FIREBASE_ADMIN_UNAVAILABLE",
           requestId,
           creditCost,
           creditsRemaining: 0,
@@ -446,7 +449,7 @@ async function reserveCredits(dbAdmin2, userId, operation, modelName) {
           tier: "free"
         };
       }
-      console.warn("[AI Gateway] Firestore Admin lacks credentials in development runtime (7 PERMISSION_DENIED). Resilient in-memory credit ledger activated.");
+      console.warn("[AI Gateway] Firestore Admin lacks credentials in development runtime. Resilient in-memory credit ledger activated.");
       return reserveFallbackCredits(userId, operation, modelName, requestId, creditCost, today);
     }
     console.error("[AI Gateway] Credit reservation transaction failed:", txErr.message);
@@ -467,6 +470,10 @@ async function reserveCredits(dbAdmin2, userId, operation, modelName) {
 async function finalizeAiUsage(dbAdmin2, requestId, userId, tokens) {
   const nowIso = (/* @__PURE__ */ new Date()).toISOString();
   if (!dbAdmin2 || isFirestoreAdminAuthorized === false) {
+    if (isProductionEnvironment()) {
+      console.error("[AI Gateway] Cannot finalize AI usage: dbAdmin is unauthorized in production.");
+      return;
+    }
     finalizeFallbackAiUsage(requestId, userId, tokens);
     return;
   }
@@ -489,7 +496,12 @@ async function finalizeAiUsage(dbAdmin2, requestId, userId, tokens) {
     ]);
     console.log(`[AI Gateway] Finalized ${requestId}. Tokens: In=${tokens.inputTokens}, Out=${tokens.outputTokens}`);
   } catch (err) {
-    if (isPermissionDeniedError(err)) {
+    if (isCredentialOrPermissionError(err)) {
+      if (isProductionEnvironment()) {
+        isFirestoreAdminAuthorized = false;
+        console.error("[AI Gateway] Cannot finalize AI usage: credentials/permissions failed in production:", err.message);
+        return;
+      }
       finalizeFallbackAiUsage(requestId, userId, tokens);
       return;
     }
@@ -499,6 +511,10 @@ async function finalizeAiUsage(dbAdmin2, requestId, userId, tokens) {
 async function refundAiUsage(dbAdmin2, requestId, userId, creditCost, errorMessage) {
   const nowIso = (/* @__PURE__ */ new Date()).toISOString();
   if (!dbAdmin2 || isFirestoreAdminAuthorized === false) {
+    if (isProductionEnvironment()) {
+      console.error("[AI Gateway] Cannot refund AI usage: dbAdmin is unauthorized in production.");
+      return false;
+    }
     return refundFallbackAiUsage(requestId, userId, creditCost, errorMessage);
   }
   const ledgerRef = dbAdmin2.collection("ai_usage").doc(requestId);
@@ -537,7 +553,12 @@ async function refundAiUsage(dbAdmin2, requestId, userId, creditCost, errorMessa
     }
     return refunded;
   } catch (err) {
-    if (isPermissionDeniedError(err)) {
+    if (isCredentialOrPermissionError(err)) {
+      if (isProductionEnvironment()) {
+        isFirestoreAdminAuthorized = false;
+        console.error(`[AI Gateway] Cannot refund AI usage: credentials/permissions failed in production for ${requestId}:`, err.message);
+        return false;
+      }
       return refundFallbackAiUsage(requestId, userId, creditCost, errorMessage);
     }
     console.error(`[AI Gateway] Refund transaction error for ${requestId}:`, err.message);
@@ -555,8 +576,8 @@ async function getUserCreditStatus(dbAdmin2, userId) {
         resetDate: today,
         tier: "free",
         lifetimeUsed: 0,
-        error: "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
-        code: "CREDIT_STORAGE_UNAVAILABLE"
+        error: "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan.",
+        code: "FIREBASE_ADMIN_UNAVAILABLE"
       };
     }
     return getFallbackUserCreditStatus(userId, today);
@@ -615,10 +636,10 @@ async function getUserCreditStatus(dbAdmin2, userId) {
       lifetimeUsed: Number(data.lifetimeAiCreditsUsed) || 0
     };
   } catch (err) {
-    if (isPermissionDeniedError(err)) {
+    if (isCredentialOrPermissionError(err)) {
       isFirestoreAdminAuthorized = false;
       if (isProductionEnvironment()) {
-        console.error(`[AI Gateway] Firestore Admin lacks credentials in production (7 PERMISSION_DENIED) for ${userId}.`);
+        console.error(`[AI Gateway] Firestore Admin credential/permission error in production for ${userId}:`, err.message);
         return {
           creditsRemaining: 0,
           creditsDailyLimit: 10,
@@ -626,11 +647,11 @@ async function getUserCreditStatus(dbAdmin2, userId) {
           resetDate: today,
           tier: "free",
           lifetimeUsed: 0,
-          error: "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
-          code: "CREDIT_STORAGE_UNAVAILABLE"
+          error: "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan.",
+          code: "FIREBASE_ADMIN_UNAVAILABLE"
         };
       }
-      console.warn("[AI Gateway] Firestore Admin lacks credentials (7 PERMISSION_DENIED). Using in-memory credits.");
+      console.warn("[AI Gateway] Firestore Admin lacks credentials (credential/permission error). Using in-memory credits.");
       return getFallbackUserCreditStatus(userId, today);
     }
     console.error(`[AI Gateway] Failed to read credits for ${userId}:`, err.message);
@@ -712,82 +733,186 @@ async function getAiAnalytics(dbAdmin2) {
 
 // server/app.ts
 dotenv.config();
+var firebaseAdminState = {
+  initialized: false,
+  credentialMode: "none",
+  firestoreReady: false
+};
 var dbAdmin = null;
 var firebaseInitStatus = "not_initialized";
-try {
-  let adminApp = null;
-  if (admin.apps.length > 0) {
-    adminApp = admin.apps[0];
-    firebaseInitStatus = "reused_existing_app";
-  } else if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+function parseAndValidateServiceAccount(rawEnv) {
+  if (!rawEnv || !rawEnv.trim()) {
+    return { valid: false, configured: false, parsed: false, error: "FIREBASE_SERVICE_ACCOUNT_KEY not set" };
+  }
+  let str = rawEnv.trim();
+  if (str.startsWith('"') && str.endsWith('"') || str.startsWith("'") && str.endsWith("'")) {
+    str = str.slice(1, -1).trim();
+  }
+  let parsedObj = null;
+  try {
+    parsedObj = JSON.parse(str);
+  } catch (e1) {
     try {
-      let rawKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY.trim();
-      if (!rawKey.startsWith("{") && !rawKey.startsWith('"')) {
-        try {
-          const decoded = Buffer.from(rawKey, "base64").toString("utf-8");
-          if (decoded.startsWith("{")) {
-            rawKey = decoded;
-          }
-        } catch (e) {
-        }
+      const decoded = Buffer.from(str, "base64").toString("utf-8").trim();
+      parsedObj = JSON.parse(decoded);
+    } catch (e2) {
+      return { valid: false, configured: true, parsed: false, error: "Failed to parse JSON (checked raw and base64)" };
+    }
+  }
+  if (!parsedObj || typeof parsedObj !== "object") {
+    return { valid: false, configured: true, parsed: false, error: "Service account is not a valid JSON object" };
+  }
+  const { type, project_id, private_key, client_email } = parsedObj;
+  const missing = [];
+  if (!type) missing.push("type");
+  if (!project_id) missing.push("project_id");
+  if (!private_key) missing.push("private_key");
+  if (!client_email) missing.push("client_email");
+  if (missing.length > 0) {
+    return {
+      valid: false,
+      configured: true,
+      parsed: true,
+      data: parsedObj,
+      error: `Missing required service account fields: ${missing.join(", ")}`
+    };
+  }
+  if (typeof private_key === "string") {
+    parsedObj.private_key = private_key.replace(/\\n/g, "\n");
+  }
+  return { valid: true, configured: true, parsed: true, data: parsedObj };
+}
+var configPath = path.join(process.cwd(), "firebase-applet-config.json");
+var expectedFrontendProjectId = process.env.FIREBASE_PROJECT_ID?.trim();
+var configuredDatabaseId = process.env.FIRESTORE_DATABASE_ID?.trim();
+if (fs.existsSync(configPath)) {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    if (!expectedFrontendProjectId && cfg.projectId) {
+      expectedFrontendProjectId = cfg.projectId.trim();
+    }
+    if (!configuredDatabaseId && cfg.firestoreDatabaseId) {
+      configuredDatabaseId = cfg.firestoreDatabaseId.trim();
+    }
+  } catch (e) {
+  }
+}
+try {
+  const isProd = isProductionEnvironment();
+  const rawKeyEnv = process.env.FIREBASE_SERVICE_ACCOUNT_KEY?.trim();
+  const sa = parseAndValidateServiceAccount(rawKeyEnv);
+  const isConfigured = sa.configured;
+  const isParsed = sa.parsed;
+  const saProjectId = sa.data?.project_id || "none";
+  const isClientEmailConfigured = Boolean(sa.data?.client_email);
+  console.log(`[FirebaseAdmin] FIREBASE_SERVICE_ACCOUNT_KEY configured: ${isConfigured ? "yes" : "no"}`);
+  console.log(`[FirebaseAdmin] service account parsed: ${isParsed ? "yes" : "no"}`);
+  console.log(`[FirebaseAdmin] project id: ${sa.valid ? saProjectId : expectedFrontendProjectId || "none"}`);
+  console.log(`[FirebaseAdmin] client email configured: ${isClientEmailConfigured ? "yes" : "no"}`);
+  let projectMismatch = false;
+  if (sa.valid && sa.data) {
+    const candidateProjectId = sa.data.project_id;
+    if (process.env.FIREBASE_PROJECT_ID?.trim() && process.env.FIREBASE_PROJECT_ID.trim() !== candidateProjectId) {
+      console.error(`[FirebaseAdmin] PROJECT_ID_MISMATCH`);
+      console.error(`[FirebaseAdmin] service account project_id (${candidateProjectId}) does not match FIREBASE_PROJECT_ID (${process.env.FIREBASE_PROJECT_ID.trim()})`);
+      projectMismatch = true;
+    }
+    if (expectedFrontendProjectId && expectedFrontendProjectId !== candidateProjectId) {
+      console.error(`[FirebaseAdmin] PROJECT_ID_MISMATCH`);
+      console.error(`[FirebaseAdmin] service account project_id (${candidateProjectId}) does not match frontend project (${expectedFrontendProjectId})`);
+      projectMismatch = true;
+    }
+  }
+  let adminApp = null;
+  if (sa.valid && !projectMismatch) {
+    try {
+      if (admin.apps.length > 0) {
+        adminApp = admin.apps[0];
+      } else {
+        adminApp = admin.initializeApp({
+          credential: admin.credential.cert(sa.data),
+          projectId: sa.data.project_id
+        });
       }
-      const serviceAccount = JSON.parse(rawKey);
-      if (serviceAccount.private_key) {
-        serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
+      if (configuredDatabaseId && configuredDatabaseId !== "(default)") {
+        dbAdmin = getFirestore(adminApp, configuredDatabaseId);
+      } else {
+        dbAdmin = getFirestore(adminApp);
       }
-      adminApp = admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-        projectId: serviceAccount.project_id || process.env.FIREBASE_PROJECT_ID
-      });
+      firebaseAdminState.initialized = true;
+      firebaseAdminState.credentialMode = "service_account_cert";
+      firebaseAdminState.firestoreReady = true;
+      firebaseAdminState.projectId = sa.data.project_id;
+      firebaseAdminState.clientEmail = sa.data.client_email;
       firebaseInitStatus = "service_account_cert";
-      console.log("[FirebaseAdmin] Successfully initialized with FIREBASE_SERVICE_ACCOUNT_KEY");
-    } catch (parseErr) {
-      console.error("[FirebaseAdmin] Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY:", parseErr.message);
+      console.log(`[FirebaseAdmin] credential mode: service_account_cert`);
+      console.log(`[FirebaseAdmin] initialization: success`);
+      console.log(`[FirebaseAdmin] Firestore ready. Target database: ${configuredDatabaseId || "(default)"}`);
+    } catch (initErr) {
+      console.error("[FirebaseAdmin] Initialization error:", initErr.message);
+      firebaseAdminState.initialized = false;
+      firebaseAdminState.credentialMode = "none";
+      firebaseAdminState.firestoreReady = false;
+      firebaseAdminState.error = initErr.message;
+      firebaseInitStatus = "error: " + initErr.message;
+      console.log(`[FirebaseAdmin] credential mode: service_account_cert`);
+      console.log(`[FirebaseAdmin] initialization: failure`);
     }
-  }
-  if (!adminApp && admin.apps.length === 0) {
-    const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-    let projectId = process.env.FIREBASE_PROJECT_ID;
-    if (fs.existsSync(configPath)) {
-      try {
-        const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-        projectId = projectId || config.projectId;
-      } catch (e) {
+  } else {
+    if (isProd) {
+      firebaseAdminState.initialized = false;
+      firebaseAdminState.credentialMode = "none";
+      firebaseAdminState.firestoreReady = false;
+      firebaseAdminState.error = projectMismatch ? "PROJECT_ID_MISMATCH" : sa.error || "FIREBASE_SERVICE_ACCOUNT_KEY missing or invalid";
+      firebaseInitStatus = "unavailable: " + firebaseAdminState.error;
+      dbAdmin = null;
+      console.log(`[FirebaseAdmin] credential mode: none`);
+      console.log(`[FirebaseAdmin] initialization: failure`);
+      if (projectMismatch) {
+        console.error("[FirebaseAdmin] PROJECT_ID_MISMATCH - Production Firebase Admin initialization aborted.");
+      } else {
+        console.error(`[FirebaseAdmin] Production Firebase Admin credentials unavailable: ${sa.error || "missing key"}. ADC fallback disabled.`);
       }
-    }
-    if (projectId) {
-      try {
-        adminApp = admin.initializeApp({ projectId });
-        firebaseInitStatus = "project_id_fallback";
-        console.log(`[FirebaseAdmin] Initialized fallback with projectId: ${projectId}`);
-      } catch (e) {
-        console.warn("[FirebaseAdmin] Fallback init warning:", e.message);
-      }
-    }
-  }
-  if (admin.apps.length > 0) {
-    const currentApp = admin.apps[0];
-    let databaseId = process.env.FIRESTORE_DATABASE_ID;
-    if (!databaseId) {
-      const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-      if (fs.existsSync(configPath)) {
-        try {
-          const cfg = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-          databaseId = cfg.firestoreDatabaseId;
-        } catch (e) {
-        }
-      }
-    }
-    if (databaseId && databaseId !== "(default)") {
-      dbAdmin = getFirestore(currentApp, databaseId);
     } else {
-      dbAdmin = getFirestore(currentApp);
+      const devProjectId = expectedFrontendProjectId || "pure-wording-pf6jr";
+      if (!adminApp && admin.apps.length === 0 && devProjectId) {
+        try {
+          adminApp = admin.initializeApp({ projectId: devProjectId });
+          if (configuredDatabaseId && configuredDatabaseId !== "(default)") {
+            dbAdmin = getFirestore(adminApp, configuredDatabaseId);
+          } else {
+            dbAdmin = getFirestore(adminApp);
+          }
+          firebaseAdminState.initialized = true;
+          firebaseAdminState.credentialMode = "development_fallback";
+          firebaseAdminState.firestoreReady = true;
+          firebaseAdminState.projectId = devProjectId;
+          firebaseInitStatus = "development_fallback";
+          console.log(`[FirebaseAdmin] credential mode: development_fallback`);
+          console.log(`[FirebaseAdmin] initialization: success (dev fallback)`);
+        } catch (devErr) {
+          console.warn("[FirebaseAdmin] Development fallback init warning:", devErr.message);
+          firebaseAdminState.initialized = false;
+          firebaseAdminState.credentialMode = "none";
+          firebaseAdminState.firestoreReady = false;
+          firebaseAdminState.error = devErr.message;
+          firebaseInitStatus = "error: " + devErr.message;
+          console.log(`[FirebaseAdmin] credential mode: none`);
+          console.log(`[FirebaseAdmin] initialization: failure`);
+        }
+      } else {
+        console.log(`[FirebaseAdmin] credential mode: none`);
+        console.log(`[FirebaseAdmin] initialization: failure`);
+      }
     }
-    console.log("[FirebaseAdmin] Firestore ready. Target database:", databaseId || "(default)");
   }
-} catch (err) {
-  console.error("[FirebaseAdmin] Initialization fatal error:", err.message);
-  firebaseInitStatus = "error: " + err.message;
+} catch (fatalErr) {
+  console.error("[FirebaseAdmin] Fatal startup error:", fatalErr.message);
+  firebaseAdminState.initialized = false;
+  firebaseAdminState.credentialMode = "none";
+  firebaseAdminState.firestoreReady = false;
+  firebaseAdminState.error = fatalErr.message;
+  firebaseInitStatus = "fatal_error: " + fatalErr.message;
 }
 function verifyTelegramWebAppData(initData, botToken) {
   try {
@@ -966,7 +1091,7 @@ async function authenticateRequestDetails(req) {
   let firebaseVerificationAttempted = false;
   let firebaseVerification = "skipped";
   let firebaseFailReason = null;
-  if (admin.apps.length > 0) {
+  if (admin.apps.length > 0 && firebaseAdminState.credentialMode === "service_account_cert") {
     firebaseVerificationAttempted = true;
     try {
       const decoded = await admin.auth().verifyIdToken(token);
@@ -1029,7 +1154,11 @@ var apiRouter = express.Router();
 apiRouter.get("/health", (req, res) => {
   res.json({
     status: "ok",
-    runtime: "vercel"
+    firebaseAdmin: {
+      initialized: firebaseAdminState.initialized,
+      credentialMode: firebaseAdminState.credentialMode,
+      firestoreReady: firebaseAdminState.firestoreReady
+    }
   });
 });
 apiRouter.post("/auth/telegram", async (req, res) => {
@@ -1198,7 +1327,7 @@ apiRouter.post("/auth/telegram", async (req, res) => {
     });
     console.log("[TelegramAuth] session token created: yes");
     let firebaseCustomToken = null;
-    if (admin.apps.length > 0) {
+    if (admin.apps.length > 0 && firebaseAdminState.credentialMode === "service_account_cert") {
       try {
         const customClaims = {
           telegramId,
@@ -1341,7 +1470,7 @@ apiRouter.post("/auth/dev-login", async (req, res) => {
       exp: Math.floor(Date.now() / 1e3) + 14 * 24 * 60 * 60
     });
     let firebaseCustomToken = null;
-    if (admin.apps.length > 0) {
+    if (admin.apps.length > 0 && firebaseAdminState.credentialMode === "service_account_cert") {
       try {
         firebaseCustomToken = await admin.auth().createCustomToken(internalUserId, {
           telegramId: devTelegramId,
@@ -1364,6 +1493,12 @@ apiRouter.post("/auth/dev-login", async (req, res) => {
 });
 apiRouter.get("/ai/credits", async (req, res) => {
   try {
+    if (isProductionEnvironment() && (!dbAdmin || !firebaseAdminState.firestoreReady)) {
+      return res.status(503).json({
+        code: "FIREBASE_ADMIN_UNAVAILABLE",
+        error: "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan."
+      });
+    }
     const authInspection = await authenticateRequestDetails(req);
     const userId = authInspection.userId;
     if (!userId) {
@@ -1374,11 +1509,17 @@ apiRouter.get("/ai/credits", async (req, res) => {
       });
     }
     const status = await getUserCreditStatus(dbAdmin, userId);
-    if (status.code === "CREDIT_STORAGE_UNAVAILABLE") {
+    if (status.code === "FIREBASE_ADMIN_UNAVAILABLE" || status.code === "CREDIT_STORAGE_UNAVAILABLE") {
       return res.status(503).json(status);
     }
     return res.json(status);
   } catch (err) {
+    if (isProductionEnvironment()) {
+      return res.status(503).json({
+        code: "FIREBASE_ADMIN_UNAVAILABLE",
+        error: "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan."
+      });
+    }
     return res.status(500).json({
       error: "Kreditlarni olishda xatolik: " + err.message,
       code: "CREDIT_FETCH_ERROR"
@@ -1431,6 +1572,13 @@ apiRouter.post("/ai", async (req, res) => {
       code: isExpired ? "SESSION_EXPIRED" : "AUTH_REQUIRED"
     });
   }
+  if (isProductionEnvironment() && (!dbAdmin || !firebaseAdminState.firestoreReady)) {
+    console.log("[AI Gateway] final response code: FIREBASE_ADMIN_UNAVAILABLE");
+    return res.status(503).json({
+      error: "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan.",
+      code: "FIREBASE_ADMIN_UNAVAILABLE"
+    });
+  }
   const { contents, systemInstruction, config, model } = req.body || {};
   const operation = validateOperation(req.body?.operation);
   const targetModel = resolveModel(operation, model);
@@ -1476,11 +1624,11 @@ apiRouter.post("/ai", async (req, res) => {
           resetDate: reservation.resetDate
         });
       }
-      if (reservation.code === "CREDIT_STORAGE_UNAVAILABLE") {
-        console.log("[AI Gateway] final response code: CREDIT_STORAGE_UNAVAILABLE");
+      if (reservation.code === "FIREBASE_ADMIN_UNAVAILABLE" || reservation.code === "CREDIT_STORAGE_UNAVAILABLE") {
+        console.log("[AI Gateway] final response code: FIREBASE_ADMIN_UNAVAILABLE");
         return res.status(503).json({
-          error: reservation.error || "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
-          code: "CREDIT_STORAGE_UNAVAILABLE"
+          error: "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan.",
+          code: "FIREBASE_ADMIN_UNAVAILABLE"
         });
       }
       console.log(`[AI Gateway] final response code: ${reservation.code || "RESERVATION_FAILED"}`);
@@ -2068,6 +2216,7 @@ export {
   authenticateRequestDetails,
   dbAdmin,
   app_default as default,
+  firebaseAdminState,
   firebaseInitStatus,
   verifySessionToken
 };

@@ -46,7 +46,12 @@ const startupLimits = getGlobalSafetyLimits();
 console.log(`[AI Gateway] Global limits initialized: dailyRequestLimit=${startupLimits.dailyRequestLimit}, dailyFreeCreditLimit=${startupLimits.dailyFreeCreditLimit}`);
 
 export function isProductionEnvironment(): boolean {
-  return process.env.NODE_ENV === "production" || process.env.VERCEL === "1";
+  return (
+    process.env.NODE_ENV === "production" ||
+    process.env.VERCEL === "1" ||
+    Boolean(process.env.VERCEL) ||
+    Boolean(process.env.VERCEL_ENV)
+  );
 }
 
 // Global in-memory accounting counters for emergency safety check across server lifespan
@@ -94,16 +99,26 @@ export function getFirestoreAdminAuthorized(): boolean | null {
   return isFirestoreAdminAuthorized;
 }
 
-export function isPermissionDeniedError(err: any): boolean {
+export function isCredentialOrPermissionError(err: any): boolean {
   if (!err) return false;
   const code = err.code || err.status;
-  const msg = String(err.message || "");
+  const msg = String(err.message || "").toLowerCase();
   return (
     code === 7 ||
+    code === 16 ||
     code === "PERMISSION_DENIED" ||
-    msg.includes("PERMISSION_DENIED") ||
-    msg.includes("Missing or insufficient permissions")
+    code === "UNAUTHENTICATED" ||
+    msg.includes("permission_denied") ||
+    msg.includes("permission denied") ||
+    msg.includes("missing or insufficient permissions") ||
+    msg.includes("could not load the default credentials") ||
+    msg.includes("default credentials") ||
+    msg.includes("unauthenticated")
   );
+}
+
+export function isPermissionDeniedError(err: any): boolean {
+  return isCredentialOrPermissionError(err);
 }
 
 function reserveFallbackCredits(
@@ -397,8 +412,8 @@ export async function reserveCredits(
     if (isProductionEnvironment()) {
       return {
         allowed: false,
-        error: "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
-        code: "CREDIT_STORAGE_UNAVAILABLE",
+        error: "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan.",
+        code: "FIREBASE_ADMIN_UNAVAILABLE",
         requestId,
         creditCost,
         creditsRemaining: 0,
@@ -564,14 +579,14 @@ export async function reserveCredits(
 
     return result;
   } catch (txErr: any) {
-    if (isPermissionDeniedError(txErr)) {
+    if (isCredentialOrPermissionError(txErr)) {
       isFirestoreAdminAuthorized = false;
       if (isProductionEnvironment()) {
-        console.error("[AI Gateway] Firestore Admin lacks credentials in production (7 PERMISSION_DENIED). Returning CREDIT_STORAGE_UNAVAILABLE.");
+        console.error("[AI Gateway] Firestore Admin lacks credentials/permission in production:", txErr.message);
         return {
           allowed: false,
-          error: "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
-          code: "CREDIT_STORAGE_UNAVAILABLE",
+          error: "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan.",
+          code: "FIREBASE_ADMIN_UNAVAILABLE",
           requestId,
           creditCost,
           creditsRemaining: 0,
@@ -581,7 +596,7 @@ export async function reserveCredits(
           tier: "free"
         };
       }
-      console.warn("[AI Gateway] Firestore Admin lacks credentials in development runtime (7 PERMISSION_DENIED). Resilient in-memory credit ledger activated.");
+      console.warn("[AI Gateway] Firestore Admin lacks credentials in development runtime. Resilient in-memory credit ledger activated.");
       return reserveFallbackCredits(userId, operation, modelName, requestId, creditCost, today);
     }
 
@@ -613,6 +628,10 @@ export async function finalizeAiUsage(
   const nowIso = new Date().toISOString();
 
   if (!dbAdmin || isFirestoreAdminAuthorized === false) {
+    if (isProductionEnvironment()) {
+      console.error("[AI Gateway] Cannot finalize AI usage: dbAdmin is unauthorized in production.");
+      return;
+    }
     finalizeFallbackAiUsage(requestId, userId, tokens);
     return;
   }
@@ -638,7 +657,12 @@ export async function finalizeAiUsage(
 
     console.log(`[AI Gateway] Finalized ${requestId}. Tokens: In=${tokens.inputTokens}, Out=${tokens.outputTokens}`);
   } catch (err: any) {
-    if (isPermissionDeniedError(err)) {
+    if (isCredentialOrPermissionError(err)) {
+      if (isProductionEnvironment()) {
+        isFirestoreAdminAuthorized = false;
+        console.error("[AI Gateway] Cannot finalize AI usage: credentials/permissions failed in production:", err.message);
+        return;
+      }
       finalizeFallbackAiUsage(requestId, userId, tokens);
       return;
     }
@@ -659,6 +683,10 @@ export async function refundAiUsage(
   const nowIso = new Date().toISOString();
 
   if (!dbAdmin || isFirestoreAdminAuthorized === false) {
+    if (isProductionEnvironment()) {
+      console.error("[AI Gateway] Cannot refund AI usage: dbAdmin is unauthorized in production.");
+      return false;
+    }
     return refundFallbackAiUsage(requestId, userId, creditCost, errorMessage);
   }
 
@@ -706,7 +734,12 @@ export async function refundAiUsage(
     }
     return refunded;
   } catch (err: any) {
-    if (isPermissionDeniedError(err)) {
+    if (isCredentialOrPermissionError(err)) {
+      if (isProductionEnvironment()) {
+        isFirestoreAdminAuthorized = false;
+        console.error(`[AI Gateway] Cannot refund AI usage: credentials/permissions failed in production for ${requestId}:`, err.message);
+        return false;
+      }
       return refundFallbackAiUsage(requestId, userId, creditCost, errorMessage);
     }
     console.error(`[AI Gateway] Refund transaction error for ${requestId}:`, err.message);
@@ -741,8 +774,8 @@ export async function getUserCreditStatus(
         resetDate: today,
         tier: "free",
         lifetimeUsed: 0,
-        error: "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
-        code: "CREDIT_STORAGE_UNAVAILABLE"
+        error: "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan.",
+        code: "FIREBASE_ADMIN_UNAVAILABLE"
       };
     }
     return getFallbackUserCreditStatus(userId, today);
@@ -810,10 +843,10 @@ export async function getUserCreditStatus(
       lifetimeUsed: Number(data.lifetimeAiCreditsUsed) || 0
     };
   } catch (err: any) {
-    if (isPermissionDeniedError(err)) {
+    if (isCredentialOrPermissionError(err)) {
       isFirestoreAdminAuthorized = false;
       if (isProductionEnvironment()) {
-        console.error(`[AI Gateway] Firestore Admin lacks credentials in production (7 PERMISSION_DENIED) for ${userId}.`);
+        console.error(`[AI Gateway] Firestore Admin credential/permission error in production for ${userId}:`, err.message);
         return {
           creditsRemaining: 0,
           creditsDailyLimit: 10,
@@ -821,11 +854,11 @@ export async function getUserCreditStatus(
           resetDate: today,
           tier: "free",
           lifetimeUsed: 0,
-          error: "Ma'lumotlar bazasi bilan aloqada xatolik yuz berdi (Firestore ruxsati yetarli emas).",
-          code: "CREDIT_STORAGE_UNAVAILABLE"
+          error: "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan.",
+          code: "FIREBASE_ADMIN_UNAVAILABLE"
         };
       }
-      console.warn("[AI Gateway] Firestore Admin lacks credentials (7 PERMISSION_DENIED). Using in-memory credits.");
+      console.warn("[AI Gateway] Firestore Admin lacks credentials (credential/permission error). Using in-memory credits.");
       return getFallbackUserCreditStatus(userId, today);
     }
     console.error(`[AI Gateway] Failed to read credits for ${userId}:`, err.message);

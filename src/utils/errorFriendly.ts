@@ -77,6 +77,14 @@ export function classifyError(error: any): { type: string; friendlyMessage: stri
     };
   }
 
+  if (code === "FIREBASE_ADMIN_UNAVAILABLE") {
+    return {
+      type: "database error",
+      friendlyMessage: "Server ma'lumotlar bazasi autentifikatsiyasi sozlanmagan.",
+      code: "FIREBASE_ADMIN_UNAVAILABLE"
+    };
+  }
+
   if (code === "CREDIT_STORAGE_UNAVAILABLE") {
     return {
       type: "database error",
@@ -201,6 +209,8 @@ export function getFriendlyErrorMessage(error: any, lang: string = "uz_lat"): st
         return "Временный лимит провайдера ИИ исчерпан. Ваши кредиты сохранены на балансе, попробуйте чуть позже.";
       case "CONCURRENT_REQUEST":
         return "Ваш предыдущий запрос еще выполняется. Пожалуйста, дождитесь его завершения.";
+      case "FIREBASE_ADMIN_UNAVAILABLE":
+        return "Аутентификация базы данных сервера не настроена. Пожалуйста, обратитесь к администратору.";
       case "CREDIT_STORAGE_UNAVAILABLE":
         return "Ошибка базы данных (недостаточно прав Firestore). Пожалуйста, обратитесь к администратору.";
       case "FIRESTORE_ERROR":
@@ -238,6 +248,8 @@ export function getFriendlyErrorMessage(error: any, lang: string = "uz_lat"): st
         return "Temporary AI provider rate limit reached. Credits preserved on your balance, please try again shortly.";
       case "CONCURRENT_REQUEST":
         return "Your previous request is still in progress. Please wait for it to finish.";
+      case "FIREBASE_ADMIN_UNAVAILABLE":
+        return "Server database authentication is not configured. Please contact administrator.";
       case "CREDIT_STORAGE_UNAVAILABLE":
         return "Database storage unavailable (insufficient Firestore permissions). Please contact administrator.";
       case "FIRESTORE_ERROR":
