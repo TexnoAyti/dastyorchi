@@ -64,6 +64,213 @@ interface FallbackUserState {
 const fallbackUsers = new Map<string, FallbackUserState>();
 const fallbackLedger = new Map<string, any>();
 
+// Status tracking for Firestore Admin credentials (detects whether server runtime has IAM permissions)
+let isFirestoreAdminAuthorized: boolean | null = null;
+
+export function setFirestoreAdminAuthorized(val: boolean) {
+  isFirestoreAdminAuthorized = val;
+}
+
+export function getFirestoreAdminAuthorized(): boolean | null {
+  return isFirestoreAdminAuthorized;
+}
+
+export function isPermissionDeniedError(err: any): boolean {
+  if (!err) return false;
+  const code = err.code || err.status;
+  const msg = String(err.message || "");
+  return (
+    code === 7 ||
+    code === "PERMISSION_DENIED" ||
+    msg.includes("PERMISSION_DENIED") ||
+    msg.includes("Missing or insufficient permissions")
+  );
+}
+
+function reserveFallbackCredits(
+  userId: string,
+  operation: AIOperation,
+  modelName: string,
+  requestId: string,
+  creditCost: number,
+  today: string
+): ReservationResult {
+  let user = fallbackUsers.get(userId);
+  if (!user) {
+    user = {
+      tier: "free",
+      dailyLimit: DEFAULT_TIER_LIMITS.free,
+      usedToday: 0,
+      remaining: DEFAULT_TIER_LIMITS.free,
+      resetDate: today,
+      lifetimeUsed: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0
+    };
+    fallbackUsers.set(userId, user);
+  }
+
+  if (user.resetDate !== today) {
+    user.usedToday = 0;
+    user.remaining = user.dailyLimit;
+    user.resetDate = today;
+  }
+
+  const safety = checkGlobalSafetyLimits(user.tier, creditCost);
+  if (!safety.allowed) {
+    return {
+      allowed: false,
+      error: safety.reason,
+      code: "GLOBAL_SAFETY_LIMIT",
+      requestId,
+      creditCost,
+      creditsRemaining: user.remaining,
+      creditsDailyLimit: user.dailyLimit,
+      creditsUsedToday: user.usedToday,
+      resetDate: user.resetDate,
+      tier: user.tier
+    };
+  }
+
+  if (user.remaining < creditCost) {
+    return {
+      allowed: false,
+      error: "Bugungi bepul AI limitingiz tugadi. AI kreditlaringiz ertaga yangilanadi.",
+      code: "AI_CREDIT_LIMIT",
+      requestId,
+      creditCost,
+      creditsRemaining: user.remaining,
+      creditsDailyLimit: user.dailyLimit,
+      creditsUsedToday: user.usedToday,
+      resetDate: user.resetDate,
+      tier: user.tier
+    };
+  }
+
+  user.remaining -= creditCost;
+  user.usedToday += creditCost;
+  user.lifetimeUsed += creditCost;
+
+  fallbackLedger.set(requestId, {
+    requestId,
+    userId,
+    operation,
+    creditCost,
+    status: "RESERVED",
+    model: modelName,
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    createdAt: new Date().toISOString(),
+    completedAt: null,
+    refundedAt: null
+  });
+
+  globalRequestsToday++;
+  if (user.tier === "free") globalFreeCreditsToday += creditCost;
+
+  return {
+    allowed: true,
+    requestId,
+    creditCost,
+    creditsRemaining: user.remaining,
+    creditsDailyLimit: user.dailyLimit,
+    creditsUsedToday: user.usedToday,
+    resetDate: user.resetDate,
+    tier: user.tier
+  };
+}
+
+function getFallbackUserCreditStatus(userId: string, today: string) {
+  const user = fallbackUsers.get(userId);
+  if (!user) {
+    return {
+      creditsRemaining: DEFAULT_TIER_LIMITS.free,
+      creditsDailyLimit: DEFAULT_TIER_LIMITS.free,
+      creditsUsedToday: 0,
+      resetDate: today,
+      tier: "free",
+      lifetimeUsed: 0
+    };
+  }
+  if (user.resetDate !== today) {
+    user.usedToday = 0;
+    user.remaining = user.dailyLimit;
+    user.resetDate = today;
+  }
+  return {
+    creditsRemaining: user.remaining,
+    creditsDailyLimit: user.dailyLimit,
+    creditsUsedToday: user.usedToday,
+    resetDate: user.resetDate,
+    tier: user.tier,
+    lifetimeUsed: user.lifetimeUsed
+  };
+}
+
+function finalizeFallbackAiUsage(
+  requestId: string,
+  userId: string,
+  tokens: { inputTokens: number; outputTokens: number; totalTokens: number }
+) {
+  const nowIso = new Date().toISOString();
+  const entry = fallbackLedger.get(requestId);
+  if (entry) {
+    entry.status = "COMPLETED";
+    entry.completedAt = nowIso;
+    entry.inputTokens = tokens.inputTokens;
+    entry.outputTokens = tokens.outputTokens;
+    entry.totalTokens = tokens.totalTokens;
+  }
+  const user = fallbackUsers.get(userId);
+  if (user) {
+    user.totalInputTokens += tokens.inputTokens;
+    user.totalOutputTokens += tokens.outputTokens;
+  }
+}
+
+function refundFallbackAiUsage(
+  requestId: string,
+  userId: string,
+  creditCost: number,
+  errorMessage: string
+): boolean {
+  const nowIso = new Date().toISOString();
+  const entry = fallbackLedger.get(requestId);
+  if (!entry || entry.status !== "RESERVED") {
+    return false;
+  }
+  entry.status = "REFUNDED";
+  entry.refundedAt = nowIso;
+  entry.error = errorMessage;
+
+  const user = fallbackUsers.get(userId);
+  if (user) {
+    user.remaining = Math.min(user.dailyLimit, user.remaining + creditCost);
+    user.usedToday = Math.max(0, user.usedToday - creditCost);
+    user.lifetimeUsed = Math.max(0, user.lifetimeUsed - creditCost);
+  }
+  if (user?.tier === "free") {
+    globalFreeCreditsToday = Math.max(0, globalFreeCreditsToday - creditCost);
+  }
+  console.log(`[AI Gateway] Refunded ${creditCost} credit(s) to user ${userId} (in-memory fallback)`);
+  return true;
+}
+
+function getFallbackAnalytics(today: string) {
+  return {
+    date: today,
+    requestsToday: fallbackLedger.size,
+    creditsConsumedToday: Array.from(fallbackLedger.values()).reduce((acc, v) => acc + (v.creditCost || 0), 0),
+    failedRequests: Array.from(fallbackLedger.values()).filter(v => v.status === "FAILED").length,
+    refundedRequests: Array.from(fallbackLedger.values()).filter(v => v.status === "REFUNDED").length,
+    totalInputTokensToday: 0,
+    totalOutputTokensToday: 0,
+    operationBreakdown: { chat: 0, reasoning: 0, document: 0, file_analysis: 0, deep_analysis: 0 },
+    modelBreakdown: {}
+  };
+}
+
 /**
  * Returns current calendar date in Asia/Tashkent timezone (YYYY-MM-DD)
  */
@@ -167,92 +374,8 @@ export async function reserveCredits(
   const creditCost = AI_CREDIT_COSTS[operation] || 1;
   const today = getTashkentDateString();
 
-  if (!dbAdmin) {
-    // In-memory fallback
-    let user = fallbackUsers.get(userId);
-    if (!user) {
-      user = {
-        tier: "free",
-        dailyLimit: DEFAULT_TIER_LIMITS.free,
-        usedToday: 0,
-        remaining: DEFAULT_TIER_LIMITS.free,
-        resetDate: today,
-        lifetimeUsed: 0,
-        totalInputTokens: 0,
-        totalOutputTokens: 0
-      };
-      fallbackUsers.set(userId, user);
-    }
-
-    if (user.resetDate !== today) {
-      user.usedToday = 0;
-      user.remaining = user.dailyLimit;
-      user.resetDate = today;
-    }
-
-    const safety = checkGlobalSafetyLimits(user.tier, creditCost);
-    if (!safety.allowed) {
-      return {
-        allowed: false,
-        error: safety.reason,
-        code: "GLOBAL_SAFETY_LIMIT",
-        requestId,
-        creditCost,
-        creditsRemaining: user.remaining,
-        creditsDailyLimit: user.dailyLimit,
-        creditsUsedToday: user.usedToday,
-        resetDate: user.resetDate,
-        tier: user.tier
-      };
-    }
-
-    if (user.remaining < creditCost) {
-      return {
-        allowed: false,
-        error: "Bugungi bepul AI limitingiz tugadi. AI kreditlaringiz ertaga yangilanadi.",
-        code: "AI_CREDIT_LIMIT",
-        requestId,
-        creditCost,
-        creditsRemaining: user.remaining,
-        creditsDailyLimit: user.dailyLimit,
-        creditsUsedToday: user.usedToday,
-        resetDate: user.resetDate,
-        tier: user.tier
-      };
-    }
-
-    user.remaining -= creditCost;
-    user.usedToday += creditCost;
-    user.lifetimeUsed += creditCost;
-
-    fallbackLedger.set(requestId, {
-      requestId,
-      userId,
-      operation,
-      creditCost,
-      status: "RESERVED",
-      model: modelName,
-      inputTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-      createdAt: new Date().toISOString(),
-      completedAt: null,
-      refundedAt: null
-    });
-
-    globalRequestsToday++;
-    if (user.tier === "free") globalFreeCreditsToday += creditCost;
-
-    return {
-      allowed: true,
-      requestId,
-      creditCost,
-      creditsRemaining: user.remaining,
-      creditsDailyLimit: user.dailyLimit,
-      creditsUsedToday: user.usedToday,
-      resetDate: user.resetDate,
-      tier: user.tier
-    };
+  if (!dbAdmin || isFirestoreAdminAuthorized === false) {
+    return reserveFallbackCredits(userId, operation, modelName, requestId, creditCost, today);
   }
 
   // Firestore transaction for production atomic consistency
@@ -390,6 +513,12 @@ export async function reserveCredits(
 
     return result;
   } catch (txErr: any) {
+    if (isPermissionDeniedError(txErr)) {
+      console.warn("[AI Gateway] Firestore Admin lacks credentials in this runtime (7 PERMISSION_DENIED). Resilient in-memory credit ledger activated.");
+      isFirestoreAdminAuthorized = false;
+      return reserveFallbackCredits(userId, operation, modelName, requestId, creditCost, today);
+    }
+
     console.error("[AI Gateway] Credit reservation transaction failed:", txErr.message);
     return {
       allowed: false,
@@ -417,20 +546,8 @@ export async function finalizeAiUsage(
 ): Promise<void> {
   const nowIso = new Date().toISOString();
 
-  if (!dbAdmin) {
-    const entry = fallbackLedger.get(requestId);
-    if (entry) {
-      entry.status = "COMPLETED";
-      entry.completedAt = nowIso;
-      entry.inputTokens = tokens.inputTokens;
-      entry.outputTokens = tokens.outputTokens;
-      entry.totalTokens = tokens.totalTokens;
-    }
-    const user = fallbackUsers.get(userId);
-    if (user) {
-      user.totalInputTokens += tokens.inputTokens;
-      user.totalOutputTokens += tokens.outputTokens;
-    }
+  if (!dbAdmin || isFirestoreAdminAuthorized === false) {
+    finalizeFallbackAiUsage(requestId, userId, tokens);
     return;
   }
 
@@ -455,6 +572,10 @@ export async function finalizeAiUsage(
 
     console.log(`[AI Gateway] Finalized ${requestId}. Tokens: In=${tokens.inputTokens}, Out=${tokens.outputTokens}`);
   } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      finalizeFallbackAiUsage(requestId, userId, tokens);
+      return;
+    }
     console.error(`[AI Gateway] Failed to finalize usage for ${requestId}:`, err.message);
   }
 }
@@ -471,27 +592,8 @@ export async function refundAiUsage(
 ): Promise<boolean> {
   const nowIso = new Date().toISOString();
 
-  if (!dbAdmin) {
-    const entry = fallbackLedger.get(requestId);
-    if (!entry || entry.status !== "RESERVED") {
-      // Already finalized or refunded - idempotent safety
-      return false;
-    }
-    entry.status = "REFUNDED";
-    entry.refundedAt = nowIso;
-    entry.error = errorMessage;
-
-    const user = fallbackUsers.get(userId);
-    if (user) {
-      user.remaining = Math.min(user.dailyLimit, user.remaining + creditCost);
-      user.usedToday = Math.max(0, user.usedToday - creditCost);
-      user.lifetimeUsed = Math.max(0, user.lifetimeUsed - creditCost);
-    }
-    if (user?.tier === "free") {
-      globalFreeCreditsToday = Math.max(0, globalFreeCreditsToday - creditCost);
-    }
-    console.log(`[AI Gateway] Refunded ${creditCost} credit(s) to user ${userId} (in-memory fallback)`);
-    return true;
+  if (!dbAdmin || isFirestoreAdminAuthorized === false) {
+    return refundFallbackAiUsage(requestId, userId, creditCost, errorMessage);
   }
 
   const ledgerRef = dbAdmin.collection("ai_usage").doc(requestId);
@@ -538,6 +640,9 @@ export async function refundAiUsage(
     }
     return refunded;
   } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      return refundFallbackAiUsage(requestId, userId, creditCost, errorMessage);
+    }
     console.error(`[AI Gateway] Refund transaction error for ${requestId}:`, err.message);
     return false;
   }
@@ -559,31 +664,8 @@ export async function getUserCreditStatus(
 }> {
   const today = getTashkentDateString();
 
-  if (!dbAdmin) {
-    const user = fallbackUsers.get(userId);
-    if (!user) {
-      return {
-        creditsRemaining: DEFAULT_TIER_LIMITS.free,
-        creditsDailyLimit: DEFAULT_TIER_LIMITS.free,
-        creditsUsedToday: 0,
-        resetDate: today,
-        tier: "free",
-        lifetimeUsed: 0
-      };
-    }
-    if (user.resetDate !== today) {
-      user.usedToday = 0;
-      user.remaining = user.dailyLimit;
-      user.resetDate = today;
-    }
-    return {
-      creditsRemaining: user.remaining,
-      creditsDailyLimit: user.dailyLimit,
-      creditsUsedToday: user.usedToday,
-      resetDate: user.resetDate,
-      tier: user.tier,
-      lifetimeUsed: user.lifetimeUsed
-    };
+  if (!dbAdmin || isFirestoreAdminAuthorized === false) {
+    return getFallbackUserCreditStatus(userId, today);
   }
 
   try {
@@ -631,6 +713,11 @@ export async function getUserCreditStatus(
       lifetimeUsed: data.lifetimeAiCreditsUsed || 0
     };
   } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      console.warn("[AI Gateway] Firestore Admin lacks credentials (7 PERMISSION_DENIED). Using in-memory credits.");
+      isFirestoreAdminAuthorized = false;
+      return getFallbackUserCreditStatus(userId, today);
+    }
     console.error(`[AI Gateway] Failed to read credits for ${userId}:`, err.message);
     return {
       creditsRemaining: 10,
@@ -649,18 +736,8 @@ export async function getUserCreditStatus(
 export async function getAiAnalytics(dbAdmin: FirebaseFirestore.Firestore | null) {
   const today = getTashkentDateString();
 
-  if (!dbAdmin) {
-    return {
-      date: today,
-      requestsToday: fallbackLedger.size,
-      creditsConsumedToday: Array.from(fallbackLedger.values()).reduce((acc, v) => acc + (v.creditCost || 0), 0),
-      failedRequests: Array.from(fallbackLedger.values()).filter(v => v.status === "FAILED").length,
-      refundedRequests: Array.from(fallbackLedger.values()).filter(v => v.status === "REFUNDED").length,
-      totalInputTokensToday: 0,
-      totalOutputTokensToday: 0,
-      operationBreakdown: { chat: 0, reasoning: 0, document: 0, file_analysis: 0, deep_analysis: 0 },
-      modelBreakdown: {}
-    };
+  if (!dbAdmin || isFirestoreAdminAuthorized === false) {
+    return getFallbackAnalytics(today);
   }
 
   try {
@@ -727,6 +804,9 @@ export async function getAiAnalytics(dbAdmin: FirebaseFirestore.Firestore | null
       topUsers
     };
   } catch (err: any) {
+    if (isPermissionDeniedError(err)) {
+      return getFallbackAnalytics(today);
+    }
     console.error("[AI Gateway] Analytics aggregation error:", err.message);
     return {
       date: today,
