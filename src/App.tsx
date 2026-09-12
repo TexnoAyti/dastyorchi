@@ -290,6 +290,8 @@ export default function App() {
           } else {
             setUser(result.user);
           }
+        }, (err) => {
+          console.warn("[App DevLogin] User snapshot notice:", err?.message || err);
         });
         setUser(result.user);
       }

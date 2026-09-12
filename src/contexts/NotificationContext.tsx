@@ -112,52 +112,6 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       }
 
       if (authUser) {
-        // One-time safe async offline upload when user authenticates to prevent reactive real-time feedback loops
-        const syncOfflineNotifications = async () => {
-          try {
-            let currentLocal: ToastMessage[] = [];
-            try {
-              const saved = localStorage.getItem("ai_notification_history");
-              if (saved) {
-                currentLocal = JSON.parse(saved);
-              }
-            } catch (e) {
-              console.error("Local storage read error inside offline sync:", e);
-            }
-
-            if (currentLocal.length === 0) return;
-
-            const qRef = collection(db, "users", authUser.uid, "notifications");
-            performanceTracker.trackFirestoreRead(`users/${authUser.uid}/notifications (one-time sync checking)`);
-            const snap = await getDocs(qRef);
-            const firestoreIds = new Set(snap.docs.map(doc => doc.id));
-            const unsynced = currentLocal.filter(local => !firestoreIds.has(local.id));
-
-            if (unsynced.length > 0) {
-              console.log(`[Notification Sync] Uploading ${unsynced.length} offline notifications once...`);
-              for (const notif of unsynced) {
-                await setDoc(doc(db, "users", authUser.uid, "notifications", notif.id), {
-                  id: notif.id,
-                  title: notif.title,
-                  body: notif.body,
-                  type: notif.type,
-                  timestamp: notif.timestamp,
-                  read: notif.read,
-                  userId: authUser.uid,
-                  chatId: notif.chatId || null,
-                  documentId: notif.documentId || null,
-                  analysisId: notif.analysisId || null,
-                });
-                performanceTracker.trackFirestoreRead(`users/${authUser.uid}/notifications/new (one-time offline sync write)`);
-              }
-            }
-          } catch (err) {
-            console.error("Error executing one-time notification upload:", err);
-          }
-        };
-
-        syncOfflineNotifications();
-
         // Logged in: establish real-time syncing listener under users/{userId}/notifications subcollection
         const q = collection(db, "users", authUser.uid, "notifications");
 
@@ -219,7 +173,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           },
           (error) => {
             console.error("Error listening to user subcollection notifications:", error);
-            handleFirestoreError(error, OperationType.GET, `users/${authUser.uid}/notifications`);
+            try {
+              handleFirestoreError(error, OperationType.LIST, `users/${authUser.uid}/notifications`);
+            } catch (handledErr) {
+              console.warn("[NotificationContext] Logged firestore subscription error:", handledErr);
+            }
           }
         );
       } else {

@@ -1,6 +1,6 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { initializeFirestore, getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 import firebaseConfigFallback from "../firebase-applet-config.json";
 
@@ -30,7 +30,18 @@ const firebaseConfig = {
 export const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+
+// Initialize Firestore with long-polling to prevent WebSocket stream assertion crashes in sandboxed iframe environments
+let dbInstance;
+try {
+  dbInstance = initializeFirestore(app, {
+    experimentalForceLongPolling: true,
+  });
+} catch {
+  dbInstance = getFirestore(app);
+}
+
+export const db = dbInstance;
 export const storage = getStorage(app);
 
 export default app;

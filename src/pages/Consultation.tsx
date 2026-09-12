@@ -867,8 +867,12 @@ export function Consultation({ user }: { user: any }) {
         }
       }
       isFirstLoad = false;
-    }, (error) => {
-      console.error("Error fetching chats:", error);
+    }, (error: any) => {
+      if (error?.code === "permission-denied" || error?.message?.includes("insufficient permissions")) {
+        console.warn("Chats query notice: Permissions syncing or unauthenticated in Firestore.", error?.message || error);
+      } else {
+        console.error("Error fetching chats:", error);
+      }
     });
 
     return () => {
@@ -915,7 +919,11 @@ export function Consultation({ user }: { user: any }) {
       }
     }, (error) => {
       console.warn("Messages stream subscription warn:", error);
-      handleFirestoreError(error, OperationType.LIST, `chats/${currentChatId}/messages`);
+      try {
+        handleFirestoreError(error, OperationType.LIST, `chats/${currentChatId}/messages`);
+      } catch (e) {
+        console.warn("[Consultation] Logged firestore subscription error:", e);
+      }
     });
 
     return () => {

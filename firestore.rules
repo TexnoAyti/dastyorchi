@@ -13,21 +13,25 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSignedIn() && (
-        (request.auth.token.role == 'admin') ||
-        (request.auth.token.admin == true) ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        ('role' in request.auth.token && request.auth.token.role == 'admin') ||
+        ('admin' in request.auth.token && request.auth.token.admin == true) ||
+        ('email' in request.auth.token && (
+          request.auth.token.email == 'arslonovazamat11@gmail.com' ||
+          request.auth.token.email == 'admin@dastyorchi.uz'
+        ))
       );
     }
 
     // 1. Users Profile & subcollections
     match /users/{userId} {
-      allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
-      allow create: if isSignedIn() && (isOwner(userId) || isAdmin());
-      allow update: if isSignedIn() && (isOwner(userId) || isAdmin());
-      allow delete: if isAdmin();
+      allow read, write: if isSignedIn() && (request.auth.uid == userId || isAdmin());
 
       match /notifications/{notificationId} {
-        allow read, write: if isSignedIn() && (isOwner(userId) || isAdmin());
+        allow read, write: if isSignedIn();
+      }
+
+      match /{allSubcollections=**} {
+        allow read, write: if isSignedIn();
       }
     }
 
@@ -37,10 +41,8 @@ service cloud.firestore {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
 
-      match /messages/{messageId} {
-        allow read, write: if isSignedIn() && (
-          get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid || isAdmin()
-        );
+      match /{allSubcollections=**} {
+        allow read, write: if isSignedIn();
       }
     }
 
@@ -50,25 +52,8 @@ service cloud.firestore {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
 
-      match /messages/{messageId} {
-        allow read, write: if isSignedIn() && (
-          get(/databases/$(database)/documents/cases/$(caseId)).data.userId == request.auth.uid || isAdmin()
-        );
-      }
-      match /evidence/{evidenceId} {
-        allow read, write: if isSignedIn() && (
-          get(/databases/$(database)/documents/cases/$(caseId)).data.userId == request.auth.uid || isAdmin()
-        );
-      }
-      match /evidenceReports/{reportId} {
-        allow read, write: if isSignedIn() && (
-          get(/databases/$(database)/documents/cases/$(caseId)).data.userId == request.auth.uid || isAdmin()
-        );
-      }
-      match /analysisMetrics/{metricId} {
-        allow read, write: if isSignedIn() && (
-          get(/databases/$(database)/documents/cases/$(caseId)).data.userId == request.auth.uid || isAdmin()
-        );
+      match /{allSubcollections=**} {
+        allow read, write: if isSignedIn();
       }
     }
 
@@ -97,10 +82,8 @@ service cloud.firestore {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
 
-      match /messages/{messageId} {
-        allow read, write: if isSignedIn() && (
-          get(/databases/$(database)/documents/archived_chats/$(chatId)).data.userId == request.auth.uid || isAdmin()
-        );
+      match /{allSubcollections=**} {
+        allow read, write: if isSignedIn();
       }
     }
     match /archived_messages/{messageId} {
@@ -110,14 +93,14 @@ service cloud.firestore {
     }
 
     // 7. Internal System Settings, Plans & Quota Limits
-    match /internal/{docId} {
+    match /internal/{docId=**} {
       allow read: if true;
       allow write: if isAdmin();
     }
 
     // 8. System Announcements
-    match /announcements/{annId} {
-      allow read: if isSignedIn();
+    match /announcements/{annId=**} {
+      allow read: if true;
       allow write: if isAdmin();
     }
 
@@ -129,7 +112,7 @@ service cloud.firestore {
     }
 
     // 10. Legal Articles Public Library (Read-only for public, admin write)
-    match /legal_articles/{articleId} {
+    match /legal_articles/{articleId=**} {
       allow read: if true;
       allow write: if isAdmin();
     }
@@ -155,15 +138,22 @@ service cloud.firestore {
       allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
-    // 14. System Logs
+    // 14. System Logs (allow signed-in clients to submit live error logs)
     match /system_logs/{logId} {
-      allow read, write: if isAdmin();
+      allow create: if isSignedIn();
+      allow read, update, delete: if isAdmin();
     }
 
     // 15. Server-Authoritative AI Usage Ledger
     match /ai_usage/{requestId} {
       allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow write: if false; // Server-only via Firebase Admin SDK
+    }
+
+    // 16. Admins
+    match /admins/{adminId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
     }
   }
 }

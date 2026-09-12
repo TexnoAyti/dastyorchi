@@ -45,8 +45,12 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
               localStorage.setItem("preferred_language", data.language);
             }
           }
-        } catch (err) {
-          console.error("[i18n] Error syncing language from Firestore profile:", err);
+        } catch (err: any) {
+          if (err?.code === "permission-denied" || err?.message?.includes("insufficient permissions")) {
+            console.warn("[i18n] Language sync notice: Profile read not permitted yet (auth state syncing).");
+          } else {
+            console.error("[i18n] Error syncing language from Firestore profile:", err);
+          }
         }
       }
     });
@@ -63,8 +67,8 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
       try {
         const userRef = doc(db, "users", user.uid);
         await updateDoc(userRef, { language: newLang });
-      } catch (err) {
-        console.error("[i18n] Failed to save language choice in remote Firestore user profile:", err);
+      } catch (err: any) {
+        console.warn("[i18n] Language saved locally; remote profile update notice:", err?.message || err);
       }
     }
   };

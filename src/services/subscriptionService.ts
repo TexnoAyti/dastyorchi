@@ -51,7 +51,7 @@ export async function getPlanLimits(): Promise<PlanLimits> {
     }
     return DEFAULT_PLAN_LIMITS;
   } catch (error) {
-    console.error("Error reading plan limits from Firestore:", error);
+    console.warn("Notice reading plan limits from Firestore, using default system limits:", error);
     return DEFAULT_PLAN_LIMITS;
   }
 }

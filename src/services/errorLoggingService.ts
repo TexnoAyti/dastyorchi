@@ -68,10 +68,11 @@ class ErrorLoggingService {
 
     console.error(`[ErrorLogger] [${errorType}] ${action}: ${customMessage || rawMessage}`, error);
 
-    if (this.isOnline) {
+    if (this.isOnline && auth.currentUser) {
       try {
         await addDoc(collection(db, "system_logs"), {
           ...record,
+          userId: auth.currentUser.uid,
           timestamp: serverTimestamp(),
           status: "synced"
         });
@@ -80,7 +81,9 @@ class ErrorLoggingService {
         this.enqueue(record);
       }
     } else {
-      console.log("[ErrorLogger] Offline. Queueing log record...", record);
+      if (!this.isOnline) {
+        console.log("[ErrorLogger] Offline. Queueing log record...", record);
+      }
       this.enqueue(record);
     }
   }
@@ -89,7 +92,7 @@ class ErrorLoggingService {
     try {
       const queue = this.getQueue();
       queue.push(record);
-      localStorage.setItem(this.queueKey, JSON.stringify(queue));
+      localStorage.setItem(this.queueKey, JSON.stringify(queue.slice(-50)));
     } catch (e) {
       console.error("[ErrorLogger] LocalStorage enqueue fails:", e);
     }
@@ -105,7 +108,7 @@ class ErrorLoggingService {
   }
 
   private async syncOfflineQueue() {
-    if (!this.isOnline) return;
+    if (!this.isOnline || !auth.currentUser) return;
     const queue = this.getQueue();
     if (queue.length === 0) return;
 
@@ -116,6 +119,7 @@ class ErrorLoggingService {
       try {
         await addDoc(collection(db, "system_logs"), {
           ...record,
+          userId: auth.currentUser.uid,
           timestamp: serverTimestamp(),
           status: "synced"
         });
