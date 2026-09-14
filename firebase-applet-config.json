@@ -1,12 +1,12 @@
 {
   "projectId": "dastyorchi",
-  "appId": "1:130596474276:web:dacaa0aa2c12e7ceb2c531",
-  "apiKey": "AIzaSyDskwpc6Vhf2dsQJgwJ5AdsMH1NaozyLhk",
+  "appId": "1:973371518386:web:e143ad3a3610ae1e6ec8ab",
+  "apiKey": "AIzaSyDd6TrvF1rS0ybDIF71WJvUG09awi06l6A",
   "authDomain": "dastyorchi.firebaseapp.com",
   "firestoreDatabaseId": "(default)",
   "storageBucket": "dastyorchi.firebasestorage.app",
-  "messagingSenderId": "130596474276",
-  "measurementId": "",
-  "oAuthClientId": "130596474276-16mrnmnjun0i1jc3at9sc0oq5cdupij8.apps.googleusercontent.com",
+  "messagingSenderId": "973371518386",
+  "measurementId": "G-P3W06RYRKE",
+  "oAuthClientId": "",
   "recaptchaSiteKey": ""
 }

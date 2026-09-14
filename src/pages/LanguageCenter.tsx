@@ -96,12 +96,16 @@ export function LanguageCenter() {
 
   // Set up Firestore Sync when auth state becomes ready
   useEffect(() => {
-    if (!currentUser) return;
+    const uid = currentUser?.uid;
+    if (!uid) return;
+
     const q = query(
       collection(db, "conversions"),
-      where("userId", "==", currentUser.uid),
+      where("userId", "==", uid),
       orderBy("createdAt", "desc")
     );
+
+    console.log("[Firestore] listener attached: Language Center Conversions");
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const histData: ConversionHistory[] = [];
       snapshot.forEach((d) => histData.push({ id: d.id, ...d.data() } as ConversionHistory));
@@ -110,8 +114,12 @@ export function LanguageCenter() {
        console.error("Conversions history sync error:", err);
        addDebugLog('error', 'Firestore-dan o\'tmish tarixi ma\'lumotlarini yangilash muvaffaqiyatsiz tugadi.', err.message);
     });
-    return () => unsubscribe();
-  }, [currentUser]);
+
+    return () => {
+      unsubscribe();
+      console.log("[Firestore] listener detached: Language Center Conversions");
+    };
+  }, [currentUser?.uid]);
 
   // Logging Helper
   const addDebugLog = (type: 'info' | 'success' | 'error', message: string, details?: any) => {

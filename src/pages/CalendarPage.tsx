@@ -269,10 +269,11 @@ export function CalendarPage() {
   };
 
   useEffect(() => {
-    if (!auth.currentUser) return;
-    const uid = auth.currentUser.uid;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
 
     const q = query(collection(db, "cases"), where("userId", "==", uid));
+    console.log("[Firestore] listener attached: Calendar Cases");
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const items = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -285,8 +286,11 @@ export function CalendarPage() {
       setLoading(false);
     });
 
-    return () => unsubscribe();
-  }, []);
+    return () => {
+      unsubscribe();
+      console.log("[Firestore] listener detached: Calendar Cases");
+    };
+  }, [auth.currentUser?.uid]);
 
   // Collect all deadlines from all cases
   const allDeadlines = cases.flatMap(c => 

@@ -18,10 +18,11 @@ export function EvidencePage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!auth.currentUser) return;
-    const uid = auth.currentUser.uid;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
 
     const q = query(collection(db, "cases"), where("userId", "==", uid));
+    console.log("[Firestore] listener attached: Evidence Cases");
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
@@ -30,8 +31,8 @@ export function EvidencePage() {
           ...doc.data(),
         })) as CaseItem[];
         setCases(items);
-        if (items.length > 0 && !selectedCase) {
-          setSelectedCase(items[0]);
+        if (items.length > 0) {
+          setSelectedCase((prev) => prev || items[0]);
         }
         setLoading(false);
       },
@@ -41,8 +42,11 @@ export function EvidencePage() {
       }
     );
 
-    return () => unsubscribe();
-  }, [selectedCase]);
+    return () => {
+      unsubscribe();
+      console.log("[Firestore] listener detached: Evidence Cases");
+    };
+  }, [auth.currentUser?.uid]);
 
   return (
     <div className="flex-1 flex flex-col lg:flex-row min-h-0 bg-gray-50 dark:bg-zinc-950 transition-colors duration-200">

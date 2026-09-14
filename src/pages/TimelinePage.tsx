@@ -28,6 +28,7 @@ export function TimelinePage() {
 
     // Load user's cases to map names & construct select filter list
     const qCases = query(collection(db, "cases"), where("userId", "==", uid));
+    console.log("[Firestore] listener attached: Timeline Cases");
     const unsubscribeCases = onSnapshot(qCases, (snap) => {
       const list = snap.docs.map(doc => ({ id: doc.id, title: doc.data().title }));
       setCasesList(list);
@@ -109,10 +110,16 @@ export function TimelinePage() {
       tempItems.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setItems(tempItems);
       setLoading(false);
+    }, (err) => {
+      console.warn("[TimelinePage] Error listening to cases:", err);
+      setLoading(false);
     });
 
-    return () => unsubscribeCases();
-  }, []);
+    return () => {
+      unsubscribeCases();
+      console.log("[Firestore] listener detached: Timeline Cases");
+    };
+  }, [auth.currentUser?.uid]);
 
   const getStatusStyle = (status: "pending" | "completed" | "overdue" | string) => {
     switch (status) {

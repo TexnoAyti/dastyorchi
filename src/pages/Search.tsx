@@ -241,16 +241,17 @@ export function SearchPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!auth.currentUser) {
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
       setLoading(false);
       return;
     }
 
-    const uid = auth.currentUser.uid;
     setLoading(true);
 
     // Fetch documents
     const qDocs = query(collection(db, "documents"), where("userId", "==", uid));
+    console.log("[Firestore] listener attached: Search Documents");
     const unsubscribeDocs = onSnapshot(qDocs, (snap) => {
       setDocuments(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     }, (error) => {
@@ -259,6 +260,7 @@ export function SearchPage() {
 
     // Fetch cases
     const qCases = query(collection(db, "cases"), where("userId", "==", uid));
+    console.log("[Firestore] listener attached: Search Cases");
     const unsubscribeCases = onSnapshot(qCases, (snap) => {
       setCases(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     }, (error) => {
@@ -267,6 +269,7 @@ export function SearchPage() {
 
     // Fetch chats
     const qChats = query(collection(db, "chats"), where("userId", "==", uid));
+    console.log("[Firestore] listener attached: Search Chats");
     const unsubscribeChats = onSnapshot(qChats, (snap) => {
       setChats(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       setLoading(false);
@@ -277,10 +280,13 @@ export function SearchPage() {
 
     return () => {
       unsubscribeDocs();
+      console.log("[Firestore] listener detached: Search Documents");
       unsubscribeCases();
+      console.log("[Firestore] listener detached: Search Cases");
       unsubscribeChats();
+      console.log("[Firestore] listener detached: Search Chats");
     };
-  }, []);
+  }, [auth.currentUser?.uid]);
 
   const getDocDate = (item: any) => {
     if (item.createdAt?.seconds) return item.createdAt.seconds * 1000;

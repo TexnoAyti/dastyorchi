@@ -38,11 +38,12 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!auth.currentUser) return;
-    const uid = auth.currentUser.uid;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
 
     // Listen to cases
     const qCases = query(collection(db, "cases"), where("userId", "==", uid));
+    console.log("[Firestore] listener attached: Dashboard Cases");
     const unsubscribeCases = onSnapshot(qCases, (snapshot) => {
       const items = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -62,6 +63,7 @@ export function Dashboard() {
       orderBy("timestamp", "desc"),
       limit(5)
     );
+    console.log("[Firestore] listener attached: Dashboard Activities");
     const unsubscribeAct = onSnapshot(qAct, (snapshot) => {
       const items = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -74,6 +76,7 @@ export function Dashboard() {
 
     // Listen to documents length
     const qDocs = query(collection(db, "documents"), where("userId", "==", uid));
+    console.log("[Firestore] listener attached: Dashboard Documents");
     const unsubscribeDocs = onSnapshot(qDocs, (snapshot) => {
       setDocumentCount(snapshot.size);
     }, (error) => {
@@ -82,10 +85,13 @@ export function Dashboard() {
 
     return () => {
       unsubscribeCases();
+      console.log("[Firestore] listener detached: Dashboard Cases");
       unsubscribeAct();
+      console.log("[Firestore] listener detached: Dashboard Activities");
       unsubscribeDocs();
+      console.log("[Firestore] listener detached: Dashboard Documents");
     };
-  }, []);
+  }, [auth.currentUser?.uid]);
 
   const totalCases = cases.length;
   const activeCases = cases.filter(c => c.status === "active" || c.status === "inprogress").length;

@@ -145,13 +145,15 @@ export function ActivityPage() {
   const [selectedType, setSelectedType] = useState<string>("Barchasi");
 
   useEffect(() => {
-    if (!auth.currentUser) return;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
 
     const q = query(
       collection(db, "activities"),
-      where("userId", "==", auth.currentUser.uid)
+      where("userId", "==", uid)
     );
 
+    console.log("[Firestore] listener attached: Activity List");
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const items = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -167,8 +169,11 @@ export function ActivityPage() {
       setLoading(false);
     });
 
-    return () => unsubscribe();
-  }, []);
+    return () => {
+      unsubscribe();
+      console.log("[Firestore] listener detached: Activity List");
+    };
+  }, [auth.currentUser?.uid]);
 
   const handleClearActivities = async () => {
     if (!window.confirm(lt.clearConfirm)) return;

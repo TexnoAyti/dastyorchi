@@ -75,6 +75,7 @@ export function UserProfile({ user }: { user?: any }) {
       return;
     }
     const userDocRef = doc(db, "users", targetUid);
+    console.log("[Firestore] listener attached: User Profile Page");
     const unsubscribe = onSnapshot(userDocRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
@@ -94,8 +95,11 @@ export function UserProfile({ user }: { user?: any }) {
       setLoading(false);
     });
 
-    return () => unsubscribe();
-  }, [user]);
+    return () => {
+      unsubscribe();
+      console.log("[Firestore] listener detached: User Profile Page");
+    };
+  }, [user?.uid, auth.currentUser?.uid]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();

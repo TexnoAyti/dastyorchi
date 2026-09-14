@@ -56,10 +56,11 @@ export function Navbar({ user, children }: { user: any; children?: React.ReactNo
 
   // Sync announcements
   useEffect(() => {
-    if (!user) {
+    if (!user?.uid) {
       setAnnouncement(null);
       return;
     }
+    console.log("[Firestore] listener attached: Navbar Announcements");
     const unsubscribe = onSnapshot(
       collection(db, "announcements"), 
       (snapshot) => {
@@ -83,8 +84,11 @@ export function Navbar({ user, children }: { user: any; children?: React.ReactNo
         setAnnouncement(null);
       }
     );
-    return () => unsubscribe();
-  }, [user]);
+    return () => {
+      unsubscribe();
+      console.log("[Firestore] listener detached: Navbar Announcements");
+    };
+  }, [user?.uid]);
 
   const handleNotificationClick = (item: any) => {
     if (!item.read) {

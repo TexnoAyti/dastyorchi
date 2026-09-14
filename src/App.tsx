@@ -38,7 +38,7 @@ import {
   devLoginBypass, 
   logoutUser 
 } from "./services/telegramAuthService";
-import { WifiOff } from "lucide-react";
+import { WifiOff, AlertCircle } from "lucide-react";
 
 interface AppContentProps {
   user: any;
@@ -143,11 +143,24 @@ function AppContent({ user, onLogout, onDevLogin, devLoading, authError, isNotMi
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [startupTimeoutError, setStartupTimeoutError] = useState(false);
   const [devLoading, setDevLoading] = useState(false);
   const [authError, setAuthError] = useState<string>("");
   const [isNotMiniApp, setIsNotMiniApp] = useState(false);
 
   useEffect(() => {
+    // Defensive startup timeout (10 seconds) to prevent infinite loading screen
+    const startupTimer = setTimeout(() => {
+      setLoading((currentLoading) => {
+        if (currentLoading) {
+          console.warn("[App Init] Startup timeout reached (10s). Releasing loading state.");
+          setStartupTimeoutError(true);
+          return false;
+        }
+        return false;
+      });
+    }, 10000);
+
     // Request notification permission on app start and trigger test alert
     requestNotificationPermission()
       .then((perm) => {
@@ -160,35 +173,60 @@ export default function App() {
       });
 
     let unsubscribeSnapshot: (() => void) | null = null;
+    let isHandlingTelegramLogin = false;
 
     const startUserSync = (uid: string, fallbackUser?: any) => {
       if (unsubscribeSnapshot) {
         unsubscribeSnapshot();
         unsubscribeSnapshot = null;
+        console.log("[Firestore] listener detached: App User Profile");
       }
 
-      const userRef = doc(db, "users", uid);
-      unsubscribeSnapshot = onSnapshot(userRef, (snap) => {
-        if (snap.exists()) {
-          const data = snap.data();
-          setUser({
-            ...fallbackUser,
-            ...data,
-            uid,
-            id: uid
-          });
-        } else {
-          setUser(fallbackUser || { uid, id: uid });
-        }
-        setLoading(false);
-      }, (err) => {
-        console.warn("[App Init] User profile snapshot warning:", err);
-        setUser(fallbackUser || { uid, id: uid });
-        setLoading(false);
-      });
+      const initialUser = fallbackUser || {
+        uid,
+        id: uid,
+      };
+
+      // AUTH SUCCESS MUST RELEASE APP UI IMMEDIATELY
+      setUser(initialUser);
+      setLoading(false);
+      clearTimeout(startupTimer);
+
+      try {
+        const userRef = doc(db, "users", uid);
+        console.log("[Firestore] listener attached: App User Profile");
+
+        unsubscribeSnapshot = onSnapshot(
+          userRef,
+          (snap) => {
+            if (snap.exists()) {
+              setUser((current: any) => ({
+                ...current,
+                ...snap.data(),
+                uid,
+                id: uid,
+              }));
+            }
+          },
+          (err) => {
+            console.warn(
+              "[App Init] User profile snapshot failed; continuing with authenticated fallback user:",
+              err
+            );
+          }
+        );
+      } catch (err) {
+        console.warn(
+          "[App Init] Could not attach user profile listener; continuing without blocking UI:",
+          err
+        );
+      }
     };
 
     const handleTelegramLogin = async () => {
+      if (isHandlingTelegramLogin) return;
+      isHandlingTelegramLogin = true;
+
       const windowTelegramExists = typeof window !== "undefined" && Boolean((window as any).Telegram);
       const webAppExists = typeof window !== "undefined" && Boolean((window as any).Telegram?.WebApp);
       const rawInitData = typeof window !== "undefined" ? (window as any).Telegram?.WebApp?.initData : "";
@@ -225,6 +263,7 @@ export default function App() {
             : (err.message || "Telegram avtorizatsiyasida xatolik yuz berdi");
           setAuthError(displayError);
           setLoading(false);
+          clearTimeout(startupTimer);
           return;
         }
       }
@@ -234,6 +273,7 @@ export default function App() {
         console.warn("[TelegramAuth] Mini App Telegram WebApp sifatida ishga tushirilmagan");
         setIsNotMiniApp(true);
         setLoading(false);
+        clearTimeout(startupTimer);
         return;
       }
 
@@ -251,6 +291,7 @@ export default function App() {
       // If neither, render browser fallback page
       setUser(null);
       setLoading(false);
+      clearTimeout(startupTimer);
     };
 
     // A. Check Firebase onAuthStateChanged first
@@ -270,9 +311,11 @@ export default function App() {
     });
 
     return () => {
+      clearTimeout(startupTimer);
       unsubscribeAuth();
       if (unsubscribeSnapshot) {
         unsubscribeSnapshot();
+        console.log("[Firestore] listener detached: App User Profile");
       }
     };
   }, []);
@@ -283,16 +326,6 @@ export default function App() {
     try {
       const result = await devLoginBypass();
       if (result.user) {
-        const userRef = doc(db, "users", result.user.uid);
-        onSnapshot(userRef, (snap) => {
-          if (snap.exists()) {
-            setUser({ ...result.user, ...snap.data(), uid: result.user.uid, id: result.user.uid });
-          } else {
-            setUser(result.user);
-          }
-        }, (err) => {
-          console.warn("[App DevLogin] User snapshot notice:", err?.message || err);
-        });
         setUser(result.user);
       }
     } catch (err: any) {
@@ -320,6 +353,30 @@ export default function App() {
         <div className="flex flex-col items-center gap-3">
           <div className="w-10 h-10 rounded-full border-3 border-blue-600 border-t-transparent animate-spin" />
           <span className="text-xs font-semibold text-gray-500 dark:text-zinc-400 tracking-tight">Dastyorchi yuklanmoqda...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (startupTimeoutError && !user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-zinc-950 p-6 text-center">
+        <div className="max-w-md w-full bg-white dark:bg-zinc-900 rounded-2xl shadow-sm border border-gray-200 dark:border-zinc-800 p-8 flex flex-col items-center">
+          <div className="w-12 h-12 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-600 flex items-center justify-center mb-4">
+            <AlertCircle className="w-6 h-6" />
+          </div>
+          <h2 className="text-base font-semibold text-gray-900 dark:text-zinc-100 mb-2">
+            Ilovani ishga tushirishda muammo yuz berdi
+          </h2>
+          <p className="text-sm text-gray-600 dark:text-zinc-400 mb-6 leading-relaxed">
+            Ilovani ishga tushirishda muammo yuz berdi. Qayta urinib ko‘ring.
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="w-full py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm transition-colors shadow-sm"
+          >
+            Qayta urinish
+          </button>
         </div>
       </div>
     );

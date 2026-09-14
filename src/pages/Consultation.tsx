@@ -810,18 +810,20 @@ export function Consultation({ user }: { user: any }) {
   }, [messages]);
 
   useEffect(() => {
-    if (!auth.currentUser) return;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
     
     let isFirstLoad = true;
     
     const chatsQuery = query(
       collection(db, "chats"), 
-      where("userId", "==", auth.currentUser.uid),
+      where("userId", "==", uid),
       orderBy("updatedAt", "desc"),
       limit(50)
     );
     
     performanceTracker.trackListenerActive("Consultation_chatsQuery");
+    console.log("[Firestore] listener attached: Consultation Chat Sessions");
     const unsubscribe = onSnapshot(chatsQuery, (snapshot) => {
       performanceTracker.trackFirestoreRead("chats (chatsQuery onSnapshot)", snapshot.docs.length || 1);
       const sessions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ChatSession));
@@ -878,12 +880,14 @@ export function Consultation({ user }: { user: any }) {
     return () => {
       unsubscribe();
       performanceTracker.trackListenerInactive("Consultation_chatsQuery");
+      console.log("[Firestore] listener detached: Consultation Chat Sessions");
     };
-  }, []);
+  }, [auth.currentUser?.uid]);
 
   // Fetch messages subcollection optimally matching scalable chat patterns
   useEffect(() => {
-    if (!currentChatId || isPrivateMode || !auth.currentUser) return;
+    const uid = auth.currentUser?.uid;
+    if (!currentChatId || isPrivateMode || !uid) return;
     
     const messagesQuery = query(
       collection(db, "chats", currentChatId, "messages"),
@@ -892,6 +896,7 @@ export function Consultation({ user }: { user: any }) {
     );
     
     performanceTracker.trackListenerActive(`Consultation_messagesQuery_${currentChatId}`);
+    console.log("[Firestore] listener attached: Consultation Chat Messages");
     const unsubscribeMessages = onSnapshot(messagesQuery, (snapshot) => {
       performanceTracker.trackFirestoreRead(`chats/${currentChatId}/messages (messagesQuery onSnapshot)`, snapshot.docs.length || 1);
       
@@ -929,8 +934,9 @@ export function Consultation({ user }: { user: any }) {
     return () => {
       unsubscribeMessages();
       performanceTracker.trackListenerInactive(`Consultation_messagesQuery_${currentChatId}`);
+      console.log("[Firestore] listener detached: Consultation Chat Messages");
     };
-  }, [currentChatId, isPrivateMode]);
+  }, [currentChatId, isPrivateMode, auth.currentUser?.uid]);
 
   const handleLanguageChange = (newLang: Language | "en") => {
     setLanguage(newLang);

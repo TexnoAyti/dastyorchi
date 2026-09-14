@@ -109,6 +109,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         unsubscribeSnap();
         unsubscribeSnap = null;
         performanceTracker.trackListenerInactive("NotificationContext");
+        console.log("[Firestore] listener detached: User Notifications");
       }
 
       if (authUser) {
@@ -122,6 +123,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         const q = collection(db, "users", authUser.uid, "notifications");
 
         performanceTracker.trackListenerActive("NotificationContext");
+        console.log("[Firestore] listener attached: User Notifications");
         unsubscribeSnap = onSnapshot(
           q,
           (snapshot) => {
@@ -206,6 +208,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       if (unsubscribeSnap) {
         unsubscribeSnap();
         performanceTracker.trackListenerInactive("NotificationContext");
+        console.log("[Firestore] listener detached: User Notifications");
       }
     };
   }, []);

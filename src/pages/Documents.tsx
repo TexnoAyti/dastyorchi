@@ -162,18 +162,20 @@ export function DocumentsPage() {
   };
 
   useEffect(() => {
-    if (!auth.currentUser) {
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
       setLoading(false);
       return;
     }
 
     const q = query(
       collection(db, "documents"),
-      where("userId", "==", auth.currentUser.uid),
+      where("userId", "==", uid),
       orderBy("createdAt", "desc"),
       limit(100)
     );
 
+    console.log("[Firestore] listener attached: Documents List");
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -186,21 +188,29 @@ export function DocumentsPage() {
       setLoading(false);
     });
 
-    return () => unsubscribe();
-  }, []);
+    return () => {
+      unsubscribe();
+      console.log("[Firestore] listener detached: Documents List");
+    };
+  }, [auth.currentUser?.uid]);
 
   // Fetch Cases for linking dropdown
   useEffect(() => {
-    if (!auth.currentUser) return;
-    const qCases = query(collection(db, "cases"), where("userId", "==", auth.currentUser.uid));
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    const qCases = query(collection(db, "cases"), where("userId", "==", uid));
+    console.log("[Firestore] listener attached: Documents Cases Link");
     const unsubscribe = onSnapshot(qCases, (snapshot) => {
       const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setCases(items);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, "cases");
     });
-    return () => unsubscribe();
-  }, []);
+    return () => {
+      unsubscribe();
+      console.log("[Firestore] listener detached: Documents Cases Link");
+    };
+  }, [auth.currentUser?.uid]);
 
   const getDocDate = (doc: any) => {
     if (doc.createdAt?.seconds) return doc.createdAt.seconds * 1000;

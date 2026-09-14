@@ -19,13 +19,15 @@ export function Profiles() {
   });
 
   useEffect(() => {
-    if (!auth.currentUser) return;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
 
     const q = query(
       collection(db, "profiles"),
-      where("userId", "==", auth.currentUser.uid)
+      where("userId", "==", uid)
     );
 
+    console.log("[Firestore] listener attached: Profiles");
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -38,8 +40,11 @@ export function Profiles() {
       setLoading(false);
     });
 
-    return () => unsubscribe();
-  }, []);
+    return () => {
+      unsubscribe();
+      console.log("[Firestore] listener detached: Profiles");
+    };
+  }, [auth.currentUser?.uid]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -93,13 +93,15 @@ export function Cases() {
 
   // 1. Fetch Legal Cases for Active User
   useEffect(() => {
-    if (!auth.currentUser) return;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
 
     const q = query(
       collection(db, "cases"),
-      where("userId", "==", auth.currentUser.uid)
+      where("userId", "==", uid)
     );
 
+    console.log("[Firestore] listener attached: Cases List");
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -115,12 +117,16 @@ export function Cases() {
       setLoading(false);
     });
 
-    return () => unsubscribe();
-  }, []);
+    return () => {
+      unsubscribe();
+      console.log("[Firestore] listener detached: Cases List");
+    };
+  }, [auth.currentUser?.uid]);
 
   // 1b. Sync Research Reports linked to Active Case
   useEffect(() => {
-    if (!activeCaseId || !auth.currentUser) {
+    const uid = auth.currentUser?.uid;
+    if (!activeCaseId || !uid) {
       setCaseReports([]);
       return;
     }
@@ -128,10 +134,11 @@ export function Cases() {
     setLoadingCaseReports(true);
     const qReport = query(
       collection(db, "research_reports"),
-      where("userId", "==", auth.currentUser.uid),
+      where("userId", "==", uid),
       where("caseId", "==", activeCaseId)
     );
 
+    console.log("[Firestore] listener attached: Case Research Reports");
     const unsubscribe = onSnapshot(qReport, (snapshot) => {
       const list = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -145,18 +152,23 @@ export function Cases() {
       setLoadingCaseReports(false);
     });
 
-    return () => unsubscribe();
-  }, [activeCaseId]);
+    return () => {
+      unsubscribe();
+      console.log("[Firestore] listener detached: Case Research Reports");
+    };
+  }, [activeCaseId, auth.currentUser?.uid]);
 
   // 2. Fetch User Documents (to link/unlink)
   useEffect(() => {
-    if (!auth.currentUser) return;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
 
     const qDocs = query(
       collection(db, "documents"),
-      where("userId", "==", auth.currentUser.uid)
+      where("userId", "==", uid)
     );
 
+    console.log("[Firestore] listener attached: Cases User Documents");
     const unsubscribe = onSnapshot(qDocs, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -167,8 +179,11 @@ export function Cases() {
       handleFirestoreError(error, OperationType.LIST, "documents");
     });
 
-    return () => unsubscribe();
-  }, []);
+    return () => {
+      unsubscribe();
+      console.log("[Firestore] listener detached: Cases User Documents");
+    };
+  }, [auth.currentUser?.uid]);
 
   // 3. Sync Active Case Chat History Subcollection
   useEffect(() => {
@@ -180,6 +195,7 @@ export function Cases() {
     const chatRef = collection(db, "cases", activeCaseId, "messages");
     const qMessage = query(chatRef, orderBy("createdAt", "asc"));
 
+    console.log("[Firestore] listener attached: Case Messages");
     const unsubscribe = onSnapshot(qMessage, (snapshot) => {
       const msgs = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -190,22 +206,27 @@ export function Cases() {
       console.error("Error matching chat messages:", error);
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      console.log("[Firestore] listener detached: Case Messages");
+    };
   }, [activeCaseId]);
 
   // 4. Sync Active Case specific activity log
   useEffect(() => {
-    if (!activeCaseId || !auth.currentUser) {
+    const uid = auth.currentUser?.uid;
+    if (!activeCaseId || !uid) {
       setCaseActivities([]);
       return;
     }
 
     const qCaseAct = query(
       collection(db, "activities"),
-      where("userId", "==", auth.currentUser.uid),
+      where("userId", "==", uid),
       where("caseId", "==", activeCaseId)
     );
 
+    console.log("[Firestore] listener attached: Case Activities");
     const unsubscribe = onSnapshot(qCaseAct, (snapshot) => {
       const items = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -217,8 +238,11 @@ export function Cases() {
       console.log("Non-critical: Error listening to case activities", error);
     });
 
-    return () => unsubscribe();
-  }, [activeCaseId]);
+    return () => {
+      unsubscribe();
+      console.log("[Firestore] listener detached: Case Activities");
+    };
+  }, [activeCaseId, auth.currentUser?.uid]);
 
   // 5. Initialize NotesText when activeCase transitions
   useEffect(() => {

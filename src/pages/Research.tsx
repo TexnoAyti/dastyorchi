@@ -59,13 +59,15 @@ export function Research() {
 
   // 1. Sync User's Research Reports from Firestore
   useEffect(() => {
-    if (!auth.currentUser) return;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
 
     const q = query(
       collection(db, "research_reports"),
-      where("userId", "==", auth.currentUser.uid)
+      where("userId", "==", uid)
     );
 
+    console.log("[Firestore] listener attached: Research Reports");
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const items = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -88,18 +90,23 @@ export function Research() {
       setLoadingReports(false);
     });
 
-    return () => unsubscribe();
-  }, [activeReport?.id]);
+    return () => {
+      unsubscribe();
+      console.log("[Firestore] listener detached: Research Reports");
+    };
+  }, [activeReport?.id, auth.currentUser?.uid]);
 
   // 2. Fetch User's Cases to establish Linking integration
   useEffect(() => {
-    if (!auth.currentUser) return;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
 
     const q = query(
       collection(db, "cases"),
-      where("userId", "==", auth.currentUser.uid)
+      where("userId", "==", uid)
     );
 
+    console.log("[Firestore] listener attached: Research Cases");
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const items = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -110,8 +117,11 @@ export function Research() {
       handleFirestoreError(error, OperationType.LIST, "cases");
     });
 
-    return () => unsubscribe();
-  }, []);
+    return () => {
+      unsubscribe();
+      console.log("[Firestore] listener detached: Research Cases");
+    };
+  }, [auth.currentUser?.uid]);
 
   // Filter compiled list
   const filteredReports = reports.filter(r => {
