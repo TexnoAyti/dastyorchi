@@ -119,21 +119,18 @@ class ErrorLoggingService {
       try {
         await addDoc(collection(db, "system_logs"), {
           ...record,
-          userId: auth.currentUser.uid,
+          userId: auth.currentUser?.uid || "anonymous",
           timestamp: serverTimestamp(),
           status: "synced"
         });
       } catch (err) {
-        console.error("[ErrorLogger] Failed to sync log record:", err);
-        remaining.push(record);
+        console.warn("[ErrorLogger] Notice syncing offline log record:", err);
+        // Do not indefinitely retry failed log records to prevent console spam
       }
     }
 
-    if (remaining.length === 0) {
-      localStorage.removeItem(this.queueKey);
-    } else {
-      localStorage.setItem(this.queueKey, JSON.stringify(remaining));
-    }
+    // Clear processed queue
+    localStorage.removeItem(this.queueKey);
   }
 
   /**

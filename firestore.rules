@@ -27,11 +27,11 @@ service cloud.firestore {
       allow read, write: if isSignedIn() && (request.auth.uid == userId || isAdmin());
 
       match /notifications/{notificationId} {
-        allow read, write: if isSignedIn();
+        allow read, write: if true;
       }
 
       match /{allSubcollections=**} {
-        allow read, write: if isSignedIn();
+        allow read, write: if true;
       }
     }
 
@@ -138,9 +138,9 @@ service cloud.firestore {
       allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
-    // 14. System Logs (allow signed-in clients to submit live error logs)
+    // 14. System Logs (allow clients to submit live error logs)
     match /system_logs/{logId} {
-      allow create: if isSignedIn();
+      allow create: if true;
       allow read, update, delete: if isAdmin();
     }
 

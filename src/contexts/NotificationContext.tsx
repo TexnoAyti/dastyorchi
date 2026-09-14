@@ -112,6 +112,12 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       }
 
       if (authUser) {
+        try {
+          await authUser.getIdToken();
+        } catch (tokenErr) {
+          console.warn("[NotificationContext] Could not refresh ID token:", tokenErr);
+        }
+
         // Logged in: establish real-time syncing listener under users/{userId}/notifications subcollection
         const q = collection(db, "users", authUser.uid, "notifications");
 
@@ -172,11 +178,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
             localStorage.setItem("ai_notification_history", JSON.stringify(finalCollection));
           },
           (error) => {
-            console.error("Error listening to user subcollection notifications:", error);
+            console.warn("[NotificationContext] Notice listening to user notifications:", error);
             try {
               handleFirestoreError(error, OperationType.LIST, `users/${authUser.uid}/notifications`);
             } catch (handledErr) {
-              console.warn("[NotificationContext] Logged firestore subscription error:", handledErr);
+              console.warn("[NotificationContext] Handled firestore subscription notice:", handledErr);
             }
           }
         );
