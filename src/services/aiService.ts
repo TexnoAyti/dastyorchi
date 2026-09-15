@@ -212,8 +212,17 @@ export async function callAIServer(params: {
       // 4. Concurrency lock / in-flight request
       if (errorCode === "CONCURRENT_REQUEST" || originalStatus === 409) {
         throw new AIServerError(
-          errorMessage || "Oldingi so'rovingiz hali bajarilmoqda. Iltimos, uning yakunlanishini kuting.",
+          errorMessage || "Oldingi AI so‘rovingiz hali yakunlanmoqda. Bir oz kutib, qayta urinib ko‘ring.",
           409,
+          errorData
+        );
+      }
+
+      // Provider Timeout
+      if (errorCode === "PROVIDER_TIMEOUT" || originalStatus === 504) {
+        throw new AIServerError(
+          errorMessage || "AI javobi belgilangan vaqtda kelmadi. Qayta urinib ko‘ring.",
+          504,
           errorData
         );
       }

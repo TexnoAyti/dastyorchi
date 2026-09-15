@@ -80,8 +80,23 @@ export function classifyError(error: any): { type: string; friendlyMessage: stri
   if (code === "CONCURRENT_REQUEST" || status === 409) {
     return {
       type: "concurrent request",
-      friendlyMessage: "Oldingi so'rovingiz hali bajarilmoqda. Iltimos, uning yakunlanishini kuting.",
+      friendlyMessage: "Oldingi AI so‘rovingiz hali yakunlanmoqda. Bir oz kutib, qayta urinib ko‘ring.",
       code: "CONCURRENT_REQUEST"
+    };
+  }
+
+  if (
+    code === "PROVIDER_TIMEOUT" ||
+    status === 504 ||
+    errMsgLower.includes("provider_timeout") ||
+    errMsgLower.includes("provider timeout") ||
+    errMsgLower.includes("gateway timeout") ||
+    errMsgLower.includes("deadline exceeded")
+  ) {
+    return {
+      type: "timeout",
+      friendlyMessage: "AI javobi belgilangan vaqtda kelmadi. Qayta urinib ko‘ring.",
+      code: "PROVIDER_TIMEOUT"
     };
   }
 
@@ -218,7 +233,9 @@ export function getFriendlyErrorMessage(error: any, lang: string = "uz_lat"): st
       case "PROVIDER_RATE_LIMIT":
         return "Временный лимит провайдера ИИ исчерпан. Ваши кредиты сохранены на балансе, попробуйте чуть позже.";
       case "CONCURRENT_REQUEST":
-        return "Ваш предыдущий запрос еще выполняется. Пожалуйста, дождитесь его завершения.";
+        return "Ваш предыдущий запрос к ИИ еще выполняется. Пожалуйста, подождите немного и повторите попытку.";
+      case "PROVIDER_TIMEOUT":
+        return "Время ожидания ответа ИИ истекло. Пожалуйста, попробуйте снова.";
       case "FIREBASE_ADMIN_UNAVAILABLE":
         return "Аутентификация базы данных сервера не настроена. Пожалуйста, обратитесь к администратору.";
       case "CREDIT_STORAGE_UNAVAILABLE":
@@ -259,7 +276,9 @@ export function getFriendlyErrorMessage(error: any, lang: string = "uz_lat"): st
       case "PROVIDER_RATE_LIMIT":
         return "Temporary AI provider rate limit reached. Credits preserved on your balance, please try again shortly.";
       case "CONCURRENT_REQUEST":
-        return "Your previous request is still in progress. Please wait for it to finish.";
+        return "Your previous AI request is still in progress. Please wait a moment and try again.";
+      case "PROVIDER_TIMEOUT":
+        return "AI response timed out. Please try again.";
       case "FIREBASE_ADMIN_UNAVAILABLE":
         return "Server database authentication is not configured. Please contact administrator.";
       case "CREDIT_STORAGE_UNAVAILABLE":

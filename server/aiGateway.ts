@@ -60,18 +60,97 @@ let globalFreeCreditsToday = 0;
 let globalResetDate = getTashkentDateString();
 
 // In-flight concurrency lock per user
-const inFlightUsers = new Set<string>();
+export interface ActiveAIRequest {
+  requestId: string;
+  startedAt: number;
+}
 
-export function acquireUserLock(userId: string): boolean {
-  if (inFlightUsers.has(userId)) {
+export const AI_REQUEST_LOCK_TTL_MS = 120_000; // 120 seconds defensive TTL
+
+// User-scoped in-flight concurrency lock map (Key = canonical UID: tg_<telegramId> or Firebase UID)
+export const activeAIRequests = new Map<string, ActiveAIRequest>();
+
+export function getSafeUid(uid: string): string {
+  if (!uid || typeof uid !== "string") return "unknown";
+  const trimmed = uid.trim();
+  if (trimmed.length <= 10) return trimmed;
+  return `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`;
+}
+
+export function getShortRequestId(id: string): string {
+  if (!id) return "";
+  return id.length <= 12 ? id : id.slice(0, 12);
+}
+
+export interface AcquireLockResult {
+  acquired: boolean;
+  requestId?: string;
+  reason?: "CONCURRENT_REQUEST" | "INVALID_UID";
+  ageMs?: number;
+}
+
+export function acquireAIRequestLock(userId: string): AcquireLockResult {
+  if (!userId || typeof userId !== "string" || userId.trim().length === 0) {
+    return { acquired: false, reason: "INVALID_UID" };
+  }
+
+  const safeUid = getSafeUid(userId);
+  const existing = activeAIRequests.get(userId);
+  const now = Date.now();
+
+  if (existing) {
+    const ageMs = now - existing.startedAt;
+    if (ageMs < AI_REQUEST_LOCK_TTL_MS) {
+      console.log(`[AI Concurrency] concurrent request rejected uid=${safeUid}`);
+      return { acquired: false, reason: "CONCURRENT_REQUEST", ageMs };
+    }
+
+    // Stale lock recovered
+    console.warn(`[AI Concurrency] stale lock recovered uid=${safeUid} ageMs=${ageMs}`);
+    activeAIRequests.delete(userId);
+  }
+
+  const requestId = `req_${now}_${Math.random().toString(36).slice(2, 9)}`;
+  activeAIRequests.set(userId, { requestId, startedAt: now });
+  console.log(`[AI Concurrency] lock acquired uid=${safeUid} requestId=${getShortRequestId(requestId)}`);
+
+  return { acquired: true, requestId };
+}
+
+export function releaseAIRequestLock(userId: string, requestId?: string): boolean {
+  if (!userId || typeof userId !== "string") {
     return false;
   }
-  inFlightUsers.add(userId);
+
+  const safeUid = getSafeUid(userId);
+  const existing = activeAIRequests.get(userId);
+
+  if (!existing) {
+    return false;
+  }
+
+  // Request-ID ownership verification: do not allow an old request's finally to release a newer lock
+  if (requestId && existing.requestId !== requestId) {
+    console.warn(`[AI Concurrency] lock release skipped: ownership mismatch for uid=${safeUid} (expected=${getShortRequestId(existing.requestId)}, got=${getShortRequestId(requestId)})`);
+    return false;
+  }
+
+  activeAIRequests.delete(userId);
+  console.log(`[AI Concurrency] lock released uid=${safeUid} requestId=${getShortRequestId(existing.requestId)}`);
   return true;
 }
 
-export function releaseUserLock(userId: string): void {
-  inFlightUsers.delete(userId);
+// Backward-compatible wrappers
+export function acquireUserLock(userId: string): boolean {
+  return acquireAIRequestLock(userId).acquired;
+}
+
+export function releaseUserLock(userId: string, requestId?: string): void {
+  releaseAIRequestLock(userId, requestId);
+}
+
+export function _clearAllLocksForTesting(): void {
+  activeAIRequests.clear();
 }
 
 // In-memory fallback stores when dbAdmin is unavailable (e.g. initial dev test without service account)
