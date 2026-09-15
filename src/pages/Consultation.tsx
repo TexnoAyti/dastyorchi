@@ -3,7 +3,7 @@ import { extractRawText } from "mammoth";
 import { motion } from "framer-motion";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { signOut } from "firebase/auth";
-import { Send, Bot, User, Scale, AlertCircle, Mic, MicOff, FileText, Download, TrendingUp, X, Plus, MessageSquare, Paperclip, ListChecks, Ghost, Briefcase, ChevronDown, CheckCircle, Lock, AlertTriangle, LogOut, Settings, LayoutDashboard, Crown, Volume2, VolumeX, Bell, History, Zap } from "lucide-react";
+import { Send, Bot, User, Scale, AlertCircle, Mic, MicOff, FileText, Download, TrendingUp, X, Plus, MessageSquare, Paperclip, ListChecks, Ghost, Briefcase, ChevronDown, CheckCircle, Lock, AlertTriangle, LogOut, Settings, LayoutDashboard, Crown, Volume2, VolumeX, Bell, History, Zap, Trash2 } from "lucide-react";
 import html2pdf from "html2pdf.js";
 import { chatWithLawyer, generateHTMLDocument, generateChatTitle, AIServerError } from "../services/aiService";
 import { Language, RiskAnalysis, Case, PersonProfile, ChatSession, ChatMessage } from "../types";
@@ -14,8 +14,9 @@ import { uploadChatFile } from "../services/storageService";
 import { db, auth } from "../firebase";
 import { handleFirestoreError, OperationType } from "../lib/firestore-error";
 import { cleanFirestoreData } from "../lib/cleanData";
-import { collection, query, where, getDocs, getDoc, addDoc, updateDoc, setDoc, doc, serverTimestamp, onSnapshot, orderBy, limit } from "firebase/firestore";
+import { collection, query, where, getDocs, getDoc, addDoc, updateDoc, setDoc, deleteDoc, doc, serverTimestamp, onSnapshot, orderBy, limit } from "firebase/firestore";
 import { archiveOldChats, archiveOldMessages } from "../services/dbArchiveService";
+import { chatPersistenceQueue } from "../services/chatPersistenceQueue";
 import { useNotification } from "../contexts/NotificationContext";
 import { isFeatureAllowed } from "../services/subscriptionService";
 import { usePaywall } from "../contexts/PaywallContext";
@@ -810,6 +811,16 @@ export function Consultation({ user }: { user: any }) {
     scrollToBottom();
   }, [messages]);
 
+  // Flush retry queue on user authentication
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (uid) {
+      chatPersistenceQueue.flushPendingWrites(uid).catch((err) => {
+        console.warn("[Consultation] Initial queue flush notice:", err);
+      });
+    }
+  }, [auth.currentUser?.uid]);
+
   useEffect(() => {
     const uid = auth.currentUser?.uid;
     if (!uid) return;
@@ -830,7 +841,7 @@ export function Consultation({ user }: { user: any }) {
       const sessions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ChatSession));
       setChatSessions(sessions);
       
-      const targetChatId = queryChatId || localStorage.getItem("activeChatId");
+      const targetChatId = queryChatId || (uid ? localStorage.getItem(`activeChatId_${uid}`) : null) || localStorage.getItem("activeChatId");
       if (!targetChatId && !hasCompletedInit.current) {
         performanceTracker.endChatInit();
         hasCompletedInit.current = true;
@@ -845,11 +856,13 @@ export function Consultation({ user }: { user: any }) {
              setMessages(activeSession.messages);
           }
           if (queryChatId) {
+            localStorage.setItem(`activeChatId_${uid}`, queryChatId);
             localStorage.setItem("activeChatId", queryChatId);
             setSearchParams({}, { replace: true });
           }
         } else if (sessions.length > 0) {
           const mostRecent = sessions[0];
+          localStorage.setItem(`activeChatId_${uid}`, mostRecent.id);
           localStorage.setItem("activeChatId", mostRecent.id);
           setCurrentChatId(mostRecent.id);
           setLanguage(mostRecent.language);
@@ -857,11 +870,13 @@ export function Consultation({ user }: { user: any }) {
              setMessages(mostRecent.messages);
           }
         } else {
+          localStorage.removeItem(`activeChatId_${uid}`);
           localStorage.removeItem("activeChatId");
           setCurrentChatId(null);
         }
       } else if (isFirstLoad && sessions.length > 0) {
         const mostRecent = sessions[0];
+        localStorage.setItem(`activeChatId_${uid}`, mostRecent.id);
         localStorage.setItem("activeChatId", mostRecent.id);
         setCurrentChatId(mostRecent.id);
         setLanguage(mostRecent.language);
@@ -912,12 +927,7 @@ export function Consultation({ user }: { user: any }) {
         return { id: doc.id, ...data, createdAt } as ChatMessage;
       });
       if (subMessages.length > 0) {
-        setMessages(prev => {
-          const map = new Map();
-          prev.forEach(m => map.set(m.id, m));
-          subMessages.forEach(m => map.set(m.id, m));
-          return Array.from(map.values()).sort((a, b) => a.createdAt - b.createdAt);
-        });
+        setMessages(subMessages);
       }
       if (!hasCompletedInit.current) {
         performanceTracker.endChatInit();
@@ -971,6 +981,10 @@ export function Consultation({ user }: { user: any }) {
   const startNewChat = () => {
     pendingChatCreationRef.current = null;
     setCurrentChatId(null);
+    const uid = auth.currentUser?.uid;
+    if (uid) {
+      localStorage.removeItem(`activeChatId_${uid}`);
+    }
     localStorage.removeItem("activeChatId");
     setMessages([
       {
@@ -1004,8 +1018,13 @@ export function Consultation({ user }: { user: any }) {
   const openChat = (chat: ChatSession) => {
     pendingChatCreationRef.current = null;
     setCurrentChatId(chat.id);
+    const uid = auth.currentUser?.uid;
+    if (uid) {
+      localStorage.setItem(`activeChatId_${uid}`, chat.id);
+    }
     localStorage.setItem("activeChatId", chat.id);
-    if (chat.messages && chat.messages.length > 0) setMessages(chat.messages);
+    // Explicitly set messages from this chat to avoid cross-chat bleeding
+    setMessages(chat.messages && chat.messages.length > 0 ? chat.messages : []);
     setLanguage(chat.language);
     localStorage.setItem("preferredLanguage", chat.language);
     
@@ -1049,110 +1068,125 @@ export function Consultation({ user }: { user: any }) {
       strategy: chat.strategy || "",
       expertise: chat.expertise || ""
     });
-    
   };
 
-  interface PersistChatParams {
-    userId: string;
-    activeChatId: string | null;
-    userMessage: ChatMessage;
-    assistantMessage: ChatMessage;
-    filesToSend: Array<{ name: string; type: string; data: string }>;
-    language: Language | "en";
-    isBusinessMode: boolean;
-    aiMode: "study" | "document";
-    response: any;
-    isDocument: boolean;
-    onChatCreated?: (newChatId: string) => void;
-  }
+  const handleDeleteChat = async (chatId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!chatId) return;
 
-  const persistChatSafely = async (params: PersistChatParams): Promise<void> => {
-    console.log("[Chat Send] persistence starting");
+    const confirmMsg = language === "ru" 
+      ? "Вы уверены, что хотите удалить этот чат?" 
+      : "Haqiqatan ham bu suhbatni o'chirmoqchimisiz?";
+    if (!window.confirm(confirmMsg)) {
+      return;
+    }
+
     try {
-      let chatId = params.activeChatId;
-
-      // 1. If it's a new chat, create parent chat document
-      if (!chatId) {
-        if (pendingChatCreationRef.current) {
-          chatId = await pendingChatCreationRef.current;
-        }
-
-        if (!chatId) {
-          const creationPromise = (async () => {
-            try {
-              const tempTitle = params.userMessage.content.slice(0, 30) + (params.userMessage.content.length > 30 ? "..." : "");
-              const newChatRef = await addDoc(collection(db, "chats"), cleanFirestoreData({
-                userId: params.userId,
-                title: tempTitle || "Yangi suhbat",
-                language: params.language,
-                isPrivate: false,
-                isBusinessMode: params.isBusinessMode,
-                aiMode: params.aiMode,
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp()
-              }));
-              return newChatRef.id;
-            } catch (createErr) {
-              console.warn("[Chat Persistence] Chat creation failed:", createErr);
-              return null;
-            }
-          })();
-
-          pendingChatCreationRef.current = creationPromise;
-          chatId = await creationPromise;
-          pendingChatCreationRef.current = null;
-
-          if (chatId) {
-            if (params.onChatCreated) {
-              params.onChatCreated(chatId);
-            }
-            archiveOldChats(params.userId).catch((err) => {
-              console.warn("[Chat Persistence] Non-blocking archiveOldChats warning:", err);
-            });
-            generateChatTitle(params.userMessage.content, params.language).then((title) => {
-              if (chatId) {
-                updateDoc(doc(db, "chats", chatId), { title }).catch(() => {});
-              }
-            }).catch(() => {});
-          }
-        }
+      await deleteDoc(doc(db, "chats", chatId));
+      if (currentChatId === chatId) {
+        startNewChat();
       }
+      setChatSessions(prev => prev.filter(c => c.id !== chatId));
+    } catch (err: any) {
+      console.error("[Consultation] Failed to delete chat:", err);
+      alert(language === "ru" ? "Ошибка при удалении чата" : "Suhbatni o'chirishda xatolik yuz berdi.");
+    }
+  };
 
-      if (!chatId) {
-        console.warn("[Chat Persistence] No chatId available to persist messages");
-        return;
-      }
+  const formatChatTime = (timestamp: any): string => {
+    if (!timestamp) return "";
+    let date: Date;
+    if (typeof timestamp?.toDate === "function") {
+      date = timestamp.toDate();
+    } else if (typeof timestamp === "number") {
+      date = new Date(timestamp);
+    } else if (typeof timestamp === "string") {
+      date = new Date(timestamp);
+    } else {
+      return "";
+    }
 
-      // 2. Prepare user message (optional non-blocking file storage upload)
-      const dbSafeUserMessage: any = { ...params.userMessage };
+    if (isNaN(date.getTime())) return "";
+
+    const now = new Date();
+    const isToday = now.toDateString() === date.toDateString();
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const isYesterday = yesterday.toDateString() === date.toDateString();
+
+    const hours = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+
+    if (isToday) {
+      return `${hours}:${minutes}`;
+    }
+    if (isYesterday) {
+      return language === "ru" ? "Вчера" : "Kecha";
+    }
+    const day = String(date.getDate()).padStart(2, "0");
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    return `${day}.${month}`;
+  };
+
+  const persistUserMessageImmediately = async (params: {
+    userId: string;
+    chatId: string;
+    message: ChatMessage;
+    filesToSend: Array<{ name: string; type: string; data: string }>;
+  }) => {
+    try {
+      const dbSafeUserMessage: any = { ...params.message };
       if (params.filesToSend && params.filesToSend.length > 0) {
         try {
           const uploadedFiles = await Promise.all(params.filesToSend.map(async (file) => {
-            const { fileUrl, storagePath } = await uploadChatFile(params.userId, chatId || "temp", file.name, file.data);
+            const { fileUrl, storagePath } = await uploadChatFile(params.userId, params.chatId, file.name, file.data);
             return { name: file.name, type: file.type, fileUrl, storagePath };
           }));
           dbSafeUserMessage.files = uploadedFiles;
         } catch (uploadError: any) {
           if (uploadError?.message !== "Storage_Not_Configured") {
-            console.warn("[Chat Persistence] Non-blocking file upload skipped/failed:", uploadError?.message || uploadError);
+            console.warn("[Chat Persistence] Non-blocking file upload skipped:", uploadError?.message || uploadError);
           }
-          dbSafeUserMessage.content = "[Fayl ilova qilingan, lekin xotiraga saqlanmadi.]\n" + dbSafeUserMessage.content;
         }
       }
 
-      // 3. Save user message to Firestore
-      await setDoc(doc(db, "chats", chatId, "messages", dbSafeUserMessage.id), cleanFirestoreData({
+      await setDoc(doc(db, "chats", params.chatId, "messages", params.message.id), cleanFirestoreData({
         ...dbSafeUserMessage,
         createdAt: serverTimestamp()
-      }));
+      }), { merge: true });
 
-      // 4. Save assistant message to Firestore
-      await setDoc(doc(db, "chats", chatId, "messages", params.assistantMessage.id), cleanFirestoreData({
+      console.log(`[Chat Persistence] User message ${params.message.id} saved in chats/${params.chatId}`);
+    } catch (err: any) {
+      console.warn("[Chat Persistence] User message immediate save failed, queuing retry:", err);
+      chatPersistenceQueue.enqueuePendingWrite({
+        id: `pending_${params.message.id}`,
+        userId: params.userId,
+        chatId: params.chatId,
+        message: {
+          id: params.message.id,
+          role: params.message.role,
+          content: params.message.content,
+          createdAt: params.message.createdAt,
+          files: params.message.files?.map(f => ({ name: f.name, type: f.type }))
+        }
+      });
+    }
+  };
+
+  const persistAssistantMessageSafely = async (params: {
+    userId: string;
+    chatId: string;
+    assistantMessage: ChatMessage;
+    aiMode: "study" | "document";
+    response: any;
+    isDocument: boolean;
+  }) => {
+    try {
+      await setDoc(doc(db, "chats", params.chatId, "messages", params.assistantMessage.id), cleanFirestoreData({
         ...params.assistantMessage,
         createdAt: serverTimestamp()
-      }));
+      }), { merge: true });
 
-      // 5. Update parent chat doc
       const updateData: any = {
         updatedAt: serverTimestamp(),
         aiMode: params.aiMode
@@ -1166,21 +1200,26 @@ export function Consultation({ user }: { user: any }) {
       if (params.response?.analysis?.strategy) updateData.strategy = params.response.analysis.strategy;
       if (params.response?.analysis?.expertise) updateData.expertise = params.response.analysis.expertise;
 
-      await updateDoc(doc(db, "chats", chatId), updateData);
-
-      // 6. Non-blocking archive check
-      archiveOldMessages(chatId, params.userId).catch((err) => {
-        console.warn("[Chat Persistence] Non-blocking archiveOldMessages warning:", err);
+      await updateDoc(doc(db, "chats", params.chatId), updateData);
+      console.log(`[Chat Persistence] Assistant message ${params.assistantMessage.id} & chat updated`);
+    } catch (err: any) {
+      console.warn("[Chat Persistence] Assistant message save failed, queuing retry:", err);
+      chatPersistenceQueue.enqueuePendingWrite({
+        id: `pending_${params.assistantMessage.id}`,
+        userId: params.userId,
+        chatId: params.chatId,
+        message: {
+          id: params.assistantMessage.id,
+          role: params.assistantMessage.role,
+          content: params.assistantMessage.content,
+          createdAt: params.assistantMessage.createdAt
+        },
+        chatMeta: {
+          aiMode: params.aiMode,
+          document: params.isDocument ? params.response?.content : undefined,
+          analysis: params.response?.analysis
+        }
       });
-
-      console.log("[Chat Send] persistence completed");
-    } catch (error: any) {
-      const safeErrorCode = error?.code || error?.name || "PERSISTENCE_ERROR";
-      console.warn(`[Chat Persistence] failed: ${safeErrorCode}`);
-      console.warn(
-        "[Chat Persistence] Firestore persistence failed, AI conversation remains usable:",
-        error
-      );
     }
   };
 
@@ -1208,10 +1247,50 @@ export function Consultation({ user }: { user: any }) {
     setIsLoading(true);
     setRetryMessage("");
 
+    const uid = auth.currentUser?.uid;
     let activeChatId = currentChatId;
 
+    // STEP 0 — ENSURE ACTIVE CHAT ID & INITIAL DOC IF NEW CHAT
+    if (!activeChatId && uid && !isPrivateMode) {
+      const newChatDocRef = doc(collection(db, "chats"));
+      activeChatId = newChatDocRef.id;
+      setCurrentChatId(activeChatId);
+      localStorage.setItem(`activeChatId_${uid}`, activeChatId);
+      localStorage.setItem("activeChatId", activeChatId);
+
+      const tempTitle = userMessage.content.slice(0, 32) + (userMessage.content.length > 32 ? "..." : "");
+      setDoc(newChatDocRef, cleanFirestoreData({
+        userId: uid,
+        title: tempTitle || "Yangi suhbat",
+        language,
+        isPrivate: false,
+        isBusinessMode,
+        aiMode,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      })).then(() => {
+        generateChatTitle(userMessage.content, language).then((title) => {
+          if (title && activeChatId) {
+            updateDoc(doc(db, "chats", activeChatId), { title }).catch(() => {});
+          }
+        }).catch(() => {});
+      }).catch((err) => {
+        console.warn("[Chat] Initial parent chat setDoc notice:", err);
+      });
+    }
+
+    // PERSIST USER MESSAGE IMMEDIATELY IN BACKGROUND (NON-BLOCKING)
+    if (activeChatId && uid && !isPrivateMode) {
+      persistUserMessageImmediately({
+        userId: uid,
+        chatId: activeChatId,
+        message: userMessage,
+        filesToSend
+      });
+    }
+
     try {
-      // STEP 1 — CALL AI FIRST
+      // STEP 1 — CALL AI
       const history = messages.length > 1 ? messages.map(m => ({ role: m.role, content: m.content })) : [];
       
       console.log("[Chat Send] AI request starting");
@@ -1273,27 +1352,17 @@ export function Consultation({ user }: { user: any }) {
         console.error("Non-blocking notification error:", notifyErr);
       }
 
-      // STEP 3 — PERSIST CHAT/FIRESTORE AFTERWARD (NON-BLOCKING)
-      if (!isPrivateMode && auth.currentUser) {
-        persistChatSafely({
-          userId: auth.currentUser.uid,
-          activeChatId,
-          userMessage,
+      // STEP 3 — PERSIST ASSISTANT MESSAGE & UPDATE CHAT (NON-BLOCKING)
+      if (!isPrivateMode && uid && activeChatId) {
+        persistAssistantMessageSafely({
+          userId: uid,
+          chatId: activeChatId,
           assistantMessage,
-          filesToSend,
-          language,
-          isBusinessMode,
           aiMode,
           response,
-          isDocument,
-          onChatCreated: (newChatId: string) => {
-            activeChatId = newChatId;
-            setCurrentChatId(newChatId);
-            localStorage.setItem("activeChatId", newChatId);
-          }
+          isDocument
         }).catch((err) => {
-          const safeCode = err?.code || err?.name || "PERSISTENCE_ERROR";
-          console.warn(`[Chat Persistence] failed: ${safeCode}`);
+          console.warn("[Chat Persistence] Assistant message persist error:", err);
         });
       }
 
@@ -1502,23 +1571,51 @@ export function Consultation({ user }: { user: any }) {
               </div>
             </div>
           </div>
-        <div className="flex-1 overflow-y-auto p-3 space-y-2 glass-scrollbar">
+        <div className="flex-1 overflow-y-auto p-3 space-y-1.5 glass-scrollbar">
           {chatSessions.length === 0 ? (
             <div className="text-center p-4 text-sm text-gray-500 font-medium">
               {lt.no_history}
             </div>
           ) : (
             chatSessions.map(chat => (
-              <button
+              <div
                 key={chat.id}
                 onClick={() => openChat(chat)}
-                className={`w-full text-left px-4 py-3 rounded-2xl text-sm transition-all flex items-center gap-3 backdrop-blur-sm ${
-                  currentChatId === chat.id ? "bg-white/70 text-blue-700 shadow-sm font-semibold" : "text-gray-600 hover:bg-white/40"
+                className={`group w-full text-left px-3.5 py-2.5 rounded-2xl text-xs sm:text-sm transition-all flex items-center justify-between gap-2 backdrop-blur-sm cursor-pointer border ${
+                  currentChatId === chat.id 
+                    ? "bg-white/80 text-blue-700 shadow-sm font-semibold border-blue-200/70" 
+                    : "text-gray-600 hover:bg-white/50 border-transparent"
                 }`}
               >
-                <MessageSquare className="w-4 h-4 flex-shrink-0" />
-                <span className="truncate">{chat.title}</span>
-              </button>
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                  <MessageSquare className="w-4 h-4 flex-shrink-0 text-blue-500" />
+                  <div className="flex flex-col min-w-0 flex-1">
+                    <span className="truncate font-medium text-gray-800 text-xs sm:text-sm">{chat.title}</span>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className={`text-[9px] px-1.5 py-0.2 rounded-md font-medium ${
+                        (chat as any).aiMode === "document" 
+                          ? "bg-purple-100 text-purple-700" 
+                          : "bg-blue-100 text-blue-700"
+                      }`}>
+                        {(chat as any).aiMode === "document" ? "Hujjat" : "Tahlil"}
+                      </span>
+                      {chat.updatedAt && (
+                        <span className="text-[10px] text-gray-400 font-normal">
+                          {formatChatTime(chat.updatedAt)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => handleDeleteChat(chat.id, e)}
+                  className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:text-red-600 rounded-lg transition-all cursor-pointer shrink-0"
+                  title="Suhbatni o'chirish"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
             ))
           )}
         </div>
@@ -1631,7 +1728,7 @@ export function Consultation({ user }: { user: any }) {
               </button>
             </div>
 
-            <div className="py-3">
+            <div className="py-2.5 space-y-2">
               <button
                 type="button"
                 onClick={() => {
@@ -1643,6 +1740,31 @@ export function Consultation({ user }: { user: any }) {
                 <Plus className="w-4 h-4" />
                 {lt.new_chat}
               </button>
+              
+              <div className="flex gap-2">
+                <button 
+                  type="button"
+                  onClick={togglePrivateMode}
+                  className={`flex-1 py-2 px-2 text-[11px] font-medium rounded-xl flex items-center justify-center gap-1 transition-all shadow-xs ${isPrivateMode ? 'bg-gray-800 text-white' : 'bg-white/70 text-gray-700 border border-gray-200/60'}`}
+                >
+                  <Ghost className="w-3 h-3" />
+                  {lt.private}
+                </button>
+                <button 
+                  type="button"
+                  onClick={() => {
+                    if (!isFeatureAllowed(userTier, "advancedLegalAnalysis")) {
+                      openPaywall("advanced");
+                    } else {
+                      setIsBusinessMode(!isBusinessMode);
+                    }
+                  }}
+                  className={`flex-1 py-2 px-2 text-[11px] font-medium rounded-xl flex items-center justify-center gap-1 transition-all shadow-xs ${isBusinessMode ? 'bg-indigo-600 text-white' : 'bg-white/70 text-gray-700 border border-gray-200/60'}`}
+                >
+                  <Briefcase className="w-3 h-3" />
+                  {lt.business}
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 glass-scrollbar">
@@ -1652,22 +1774,47 @@ export function Consultation({ user }: { user: any }) {
                 </div>
               ) : (
                 chatSessions.map(chat => (
-                  <button
+                  <div
                     key={chat.id}
-                    type="button"
                     onClick={() => {
                       openChat(chat);
                       setMobileHistoryOpen(false);
                     }}
-                    className={`w-full text-left px-3 py-2.5 rounded-xl text-xs transition-all flex items-center gap-2.5 cursor-pointer ${
+                    className={`w-full text-left px-3 py-2.5 rounded-xl text-xs transition-all flex items-center justify-between gap-2 cursor-pointer border ${
                       currentChatId === chat.id 
-                        ? "bg-blue-50 text-blue-700 font-bold border border-blue-200 shadow-xs" 
-                        : "text-gray-600 hover:bg-gray-100/60"
+                        ? "bg-blue-50 text-blue-700 font-bold border-blue-200 shadow-xs" 
+                        : "text-gray-600 hover:bg-gray-100/60 border-transparent"
                     }`}
                   >
-                    <MessageSquare className="w-3.5 h-3.5 flex-shrink-0" />
-                    <span className="truncate">{chat.title}</span>
-                  </button>
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <MessageSquare className="w-3.5 h-3.5 flex-shrink-0 text-blue-500" />
+                      <div className="flex flex-col min-w-0 flex-1">
+                        <span className="truncate font-medium text-gray-800 text-xs">{chat.title}</span>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className={`text-[9px] px-1.5 py-0.2 rounded-md font-medium ${
+                            (chat as any).aiMode === "document" 
+                              ? "bg-purple-100 text-purple-700" 
+                              : "bg-blue-100 text-blue-700"
+                          }`}>
+                            {(chat as any).aiMode === "document" ? "Hujjat" : "Tahlil"}
+                          </span>
+                          {chat.updatedAt && (
+                            <span className="text-[9px] text-gray-400 font-normal">
+                              {formatChatTime(chat.updatedAt)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => handleDeleteChat(chat.id, e)}
+                      className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg transition-colors cursor-pointer shrink-0"
+                      title="Suhbatni o'chirish"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 ))
               )}
             </div>

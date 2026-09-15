@@ -27,68 +27,83 @@ service cloud.firestore {
       allow read, write: if isSignedIn() && (request.auth.uid == userId || isAdmin());
 
       match /notifications/{notificationId} {
-        allow read, write: if true;
+        allow read, write: if isSignedIn() && (request.auth.uid == userId || isAdmin());
       }
 
       match /{allSubcollections=**} {
-        allow read, write: if true;
+        allow read, write: if isSignedIn() && (request.auth.uid == userId || isAdmin());
       }
     }
 
     // 2. Chat Sessions & Messages
     match /chats/{chatId} {
-      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
 
+      match /messages/{messageId} {
+        allow create: if isSignedIn() && (
+          get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid || isAdmin()
+        );
+        allow read, update, delete: if isSignedIn() && (
+          get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid || isAdmin()
+        );
+      }
+
       match /{allSubcollections=**} {
-        allow read, write: if isSignedIn();
+        allow read, write: if isSignedIn() && (
+          get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid || isAdmin()
+        );
       }
     }
 
     // 3. Legal Cases & Subcollections
     match /cases/{caseId} {
-      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
 
       match /{allSubcollections=**} {
-        allow read, write: if isSignedIn();
+        allow read, write: if isSignedIn() && (
+          get(/databases/$(database)/documents/cases/$(caseId)).data.userId == request.auth.uid || isAdmin()
+        );
       }
     }
 
     // 4. Person / Client Profiles
     match /profiles/{profileId} {
-      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
     // 5. Generated Legal Documents
     match /documents/{docId} {
-      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
     // 6. Archived Documents & Chats
     match /archived_documents/{docId} {
-      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
     match /archived_chats/{chatId} {
-      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
 
       match /{allSubcollections=**} {
-        allow read, write: if isSignedIn();
+        allow read, write: if isSignedIn() && (
+          get(/databases/$(database)/documents/archived_chats/$(chatId)).data.userId == request.auth.uid || isAdmin()
+        );
       }
     }
     match /archived_messages/{messageId} {
-      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
@@ -140,7 +155,7 @@ service cloud.firestore {
 
     // 14. System Logs (allow clients to submit live error logs)
     match /system_logs/{logId} {
-      allow create: if true;
+      allow create: if isSignedIn();
       allow read, update, delete: if isAdmin();
     }
 

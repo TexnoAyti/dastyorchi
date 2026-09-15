@@ -847,6 +847,109 @@ apiRouter.post("/auth/telegram", async (req, res) => {
 });
 
 // ------------------------------------------
+// GET & POST /telegram/webhook
+// ------------------------------------------
+apiRouter.get("/telegram/webhook", (req, res) => {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
+  const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim();
+  const webAppUrl = process.env.TELEGRAM_WEBAPP_URL?.trim() || "https://dastyorchi.vercel.app";
+
+  return res.json({
+    status: "online",
+    service: "Dastyorchi Telegram Bot Webhook Gateway",
+    botConfigured: Boolean(botToken),
+    webhookSecretConfigured: Boolean(webhookSecret),
+    webAppUrl: webAppUrl
+  });
+});
+
+apiRouter.post("/telegram/webhook", async (req, res) => {
+  try {
+    const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim();
+    if (webhookSecret) {
+      const incomingSecret = req.headers["x-telegram-bot-api-secret-token"];
+      if (incomingSecret !== webhookSecret) {
+        console.warn("[Telegram Webhook] Unauthorized request: secret token mismatch");
+        return res.status(403).json({ error: "Unauthorized webhook secret" });
+      }
+    }
+
+    const botToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
+    if (!botToken) {
+      console.warn("[Telegram Webhook] Received update but TELEGRAM_BOT_TOKEN is not configured");
+      return res.status(200).json({ ok: true, message: "Bot token not configured on server" });
+    }
+
+    const update = req.body || {};
+    const message = update.message || update.edited_message;
+
+    // Gracefully ignore unsupported updates (channel posts, reactions, etc.)
+    if (!message || !message.chat?.id) {
+      return res.status(200).json({ ok: true, ignored: true });
+    }
+
+    const chatId = message.chat.id;
+    const text = (message.text || "").trim();
+    const firstName = message.from?.first_name || "";
+    const webAppUrl = process.env.TELEGRAM_WEBAPP_URL?.trim() || "https://dastyorchi.vercel.app";
+
+    console.log(`[Telegram Webhook] Update from chatId=${chatId}, text="${text.slice(0, 30)}"`);
+
+    const isStart = text.startsWith("/start");
+
+    const welcomeText = `Assalomu alaykum${firstName ? `, ${firstName}` : ""}! 👋
+
+Dastyorchi — huquqiy masalalarni tushunish, hujjatlar tayyorlash va AI yordamida huquqiy tahlil olish uchun yaratilgan aqlli yordamchi.
+
+⚖️ Huquqiy savollarga javob
+📄 Ariza va hujjatlar tayyorlash
+🔎 Hujjatlarni tahlil qilish
+📁 Ish va hujjatlarni boshqarish
+
+Boshlash uchun quyidagi tugmani bosing.`;
+
+    const generalReply = `Assalomu alaykum! Dastyorchi yuridik yordamchisidan to'liq foydalanish uchun quyidagi tugma orqali ilovani oching:`;
+
+    const replyMarkup = {
+      inline_keyboard: [
+        [
+          {
+            text: "Dastyorchini ochish 🚀",
+            web_app: {
+              url: webAppUrl
+            }
+          }
+        ]
+      ]
+    };
+
+    // Non-blocking fetch with defensive timeout so webhook returns quickly to Telegram
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 7000);
+
+    fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: isStart ? welcomeText : generalReply,
+        reply_markup: replyMarkup
+      }),
+      signal: controller.signal
+    }).catch((err) => {
+      console.error("[Telegram Webhook] Failed to send Telegram message:", err?.message || err);
+    }).finally(() => {
+      clearTimeout(timeout);
+    });
+
+    return res.status(200).json({ ok: true });
+  } catch (error: any) {
+    console.error("[Telegram Webhook] Error processing update:", error);
+    return res.status(200).json({ ok: true, error: error?.message || "Handler error" });
+  }
+});
+
+// ------------------------------------------
 // GET /auth/session
 // ------------------------------------------
 apiRouter.get("/auth/session", async (req, res) => {
