@@ -5,7 +5,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { Send, Bot, User, Scale, AlertCircle, Mic, MicOff, FileText, Download, TrendingUp, X, Plus, MessageSquare, Paperclip, ListChecks, Ghost, Briefcase, ChevronDown, CheckCircle, Lock, AlertTriangle, LogOut, Settings, LayoutDashboard, Crown, Volume2, VolumeX, Bell, History, Zap } from "lucide-react";
 import html2pdf from "html2pdf.js";
-import { chatWithLawyer, generateHTMLDocument, generateChatTitle } from "../services/aiService";
+import { chatWithLawyer, generateHTMLDocument, generateChatTitle, AIServerError } from "../services/aiService";
 import { Language, RiskAnalysis, Case, PersonProfile, ChatSession, ChatMessage } from "../types";
 import Markdown from "react-markdown";
 import { DocumentEditor } from "../components/DocumentEditor";
@@ -17,7 +17,7 @@ import { cleanFirestoreData } from "../lib/cleanData";
 import { collection, query, where, getDocs, getDoc, addDoc, updateDoc, setDoc, doc, serverTimestamp, onSnapshot, orderBy, limit } from "firebase/firestore";
 import { archiveOldChats, archiveOldMessages } from "../services/dbArchiveService";
 import { useNotification } from "../contexts/NotificationContext";
-import { checkRequestQuota, incrementUserRequests, isFeatureAllowed } from "../services/subscriptionService";
+import { isFeatureAllowed } from "../services/subscriptionService";
 import { usePaywall } from "../contexts/PaywallContext";
 import { generateMeaningfulFilename } from "../utils/documentNaming";
 import { performanceTracker } from "../utils/performanceTracker";
@@ -441,6 +441,7 @@ export function Consultation({ user }: { user: any }) {
   }, [language, lt.welcome]);
 
   const chatInputRef = useRef<ChatInputRef>(null);
+  const pendingChatCreationRef = useRef<Promise<string | null> | null>(null);
   const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [retryMessage, setRetryMessage] = useState("");
@@ -951,6 +952,7 @@ export function Consultation({ user }: { user: any }) {
     setIsPrivateMode(newMode);
     
     // HARD WIPE ENFORCEMENT: Destroy context when shifting security boundaries
+    pendingChatCreationRef.current = null;
     setCurrentChatId(null);
     localStorage.removeItem("activeChatId");
     setMessages([
@@ -967,6 +969,7 @@ export function Consultation({ user }: { user: any }) {
   };
 
   const startNewChat = () => {
+    pendingChatCreationRef.current = null;
     setCurrentChatId(null);
     localStorage.removeItem("activeChatId");
     setMessages([
@@ -999,6 +1002,7 @@ export function Consultation({ user }: { user: any }) {
   };
 
   const openChat = (chat: ChatSession) => {
+    pendingChatCreationRef.current = null;
     setCurrentChatId(chat.id);
     localStorage.setItem("activeChatId", chat.id);
     if (chat.messages && chat.messages.length > 0) setMessages(chat.messages);
@@ -1048,16 +1052,142 @@ export function Consultation({ user }: { user: any }) {
     
   };
 
+  interface PersistChatParams {
+    userId: string;
+    activeChatId: string | null;
+    userMessage: ChatMessage;
+    assistantMessage: ChatMessage;
+    filesToSend: Array<{ name: string; type: string; data: string }>;
+    language: Language | "en";
+    isBusinessMode: boolean;
+    aiMode: "study" | "document";
+    response: any;
+    isDocument: boolean;
+    onChatCreated?: (newChatId: string) => void;
+  }
+
+  const persistChatSafely = async (params: PersistChatParams): Promise<void> => {
+    console.log("[Chat Send] persistence starting");
+    try {
+      let chatId = params.activeChatId;
+
+      // 1. If it's a new chat, create parent chat document
+      if (!chatId) {
+        if (pendingChatCreationRef.current) {
+          chatId = await pendingChatCreationRef.current;
+        }
+
+        if (!chatId) {
+          const creationPromise = (async () => {
+            try {
+              const tempTitle = params.userMessage.content.slice(0, 30) + (params.userMessage.content.length > 30 ? "..." : "");
+              const newChatRef = await addDoc(collection(db, "chats"), cleanFirestoreData({
+                userId: params.userId,
+                title: tempTitle || "Yangi suhbat",
+                language: params.language,
+                isPrivate: false,
+                isBusinessMode: params.isBusinessMode,
+                aiMode: params.aiMode,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp()
+              }));
+              return newChatRef.id;
+            } catch (createErr) {
+              console.warn("[Chat Persistence] Chat creation failed:", createErr);
+              return null;
+            }
+          })();
+
+          pendingChatCreationRef.current = creationPromise;
+          chatId = await creationPromise;
+          pendingChatCreationRef.current = null;
+
+          if (chatId) {
+            if (params.onChatCreated) {
+              params.onChatCreated(chatId);
+            }
+            archiveOldChats(params.userId).catch((err) => {
+              console.warn("[Chat Persistence] Non-blocking archiveOldChats warning:", err);
+            });
+            generateChatTitle(params.userMessage.content, params.language).then((title) => {
+              if (chatId) {
+                updateDoc(doc(db, "chats", chatId), { title }).catch(() => {});
+              }
+            }).catch(() => {});
+          }
+        }
+      }
+
+      if (!chatId) {
+        console.warn("[Chat Persistence] No chatId available to persist messages");
+        return;
+      }
+
+      // 2. Prepare user message (optional non-blocking file storage upload)
+      const dbSafeUserMessage: any = { ...params.userMessage };
+      if (params.filesToSend && params.filesToSend.length > 0) {
+        try {
+          const uploadedFiles = await Promise.all(params.filesToSend.map(async (file) => {
+            const { fileUrl, storagePath } = await uploadChatFile(params.userId, chatId || "temp", file.name, file.data);
+            return { name: file.name, type: file.type, fileUrl, storagePath };
+          }));
+          dbSafeUserMessage.files = uploadedFiles;
+        } catch (uploadError: any) {
+          if (uploadError?.message !== "Storage_Not_Configured") {
+            console.warn("[Chat Persistence] Non-blocking file upload skipped/failed:", uploadError?.message || uploadError);
+          }
+          dbSafeUserMessage.content = "[Fayl ilova qilingan, lekin xotiraga saqlanmadi.]\n" + dbSafeUserMessage.content;
+        }
+      }
+
+      // 3. Save user message to Firestore
+      await setDoc(doc(db, "chats", chatId, "messages", dbSafeUserMessage.id), cleanFirestoreData({
+        ...dbSafeUserMessage,
+        createdAt: serverTimestamp()
+      }));
+
+      // 4. Save assistant message to Firestore
+      await setDoc(doc(db, "chats", chatId, "messages", params.assistantMessage.id), cleanFirestoreData({
+        ...params.assistantMessage,
+        createdAt: serverTimestamp()
+      }));
+
+      // 5. Update parent chat doc
+      const updateData: any = {
+        updatedAt: serverTimestamp(),
+        aiMode: params.aiMode
+      };
+      if (params.isDocument && params.response?.content) updateData.document = params.response.content;
+      if (params.response?.analysis?.winningProbability != null) updateData.winningProbability = params.response.analysis.winningProbability;
+      if (params.response?.analysis?.riskLevel) updateData.riskLevel = params.response.analysis.riskLevel;
+      if (params.response?.analysis?.strengths) updateData.strengths = params.response.analysis.strengths;
+      if (params.response?.analysis?.weaknesses) updateData.weaknesses = params.response.analysis.weaknesses;
+      if (params.response?.analysis?.risk) updateData.risk = params.response.analysis.risk;
+      if (params.response?.analysis?.strategy) updateData.strategy = params.response.analysis.strategy;
+      if (params.response?.analysis?.expertise) updateData.expertise = params.response.analysis.expertise;
+
+      await updateDoc(doc(db, "chats", chatId), updateData);
+
+      // 6. Non-blocking archive check
+      archiveOldMessages(chatId, params.userId).catch((err) => {
+        console.warn("[Chat Persistence] Non-blocking archiveOldMessages warning:", err);
+      });
+
+      console.log("[Chat Send] persistence completed");
+    } catch (error: any) {
+      const safeErrorCode = error?.code || error?.name || "PERSISTENCE_ERROR";
+      console.warn(`[Chat Persistence] failed: ${safeErrorCode}`);
+      console.warn(
+        "[Chat Persistence] Firestore persistence failed, AI conversation remains usable:",
+        error
+      );
+    }
+  };
+
   const handleSubmit = async (text: string, files: Array<{ name: string; type: string; data: string }>) => {
     if ((!text.trim() && files.length === 0) || isLoading) return;
 
-    if (auth.currentUser) {
-      const quota = await checkRequestQuota(auth.currentUser.uid);
-      if (!quota.allowed) {
-        openPaywall("requests");
-        return;
-      }
-    }
+    console.log("[Chat Send] submit started");
 
     const userMessage: any = {
       id: (Date.now() + Math.random()).toString(),
@@ -1071,8 +1201,8 @@ export function Consultation({ user }: { user: any }) {
       userMessage.files = files.map(f => ({ ...f, data: f.data }));
     }
 
-    const newMessages = [...messages, userMessage];
     setMessages(prev => [...prev, userMessage]);
+    console.log("[Chat Send] local message added");
     
     const filesToSend = [...files];
     setIsLoading(true);
@@ -1081,88 +1211,25 @@ export function Consultation({ user }: { user: any }) {
     let activeChatId = currentChatId;
 
     try {
-      // Create DB-safe version of the chat history
-      const dbSafeMessages = [...messages];
-      const dbSafeUserMessage = { ...userMessage };
-      
-      const shouldSaveToDb = !isPrivateMode && auth.currentUser;
-      
-      // 1. Immediate save of user message
-      if (shouldSaveToDb) {
-        
-        // If it's the very first message, we must create the parent chat doc before saving files or messages
-        if (!activeChatId) {
-          const tempTitle = userMessage.content.slice(0, 30) + (userMessage.content.length > 30 ? "..." : "");
-          const newChatRef = await addDoc(collection(db, "chats"), cleanFirestoreData({
-            userId: auth.currentUser!.uid,
-            title: tempTitle,
-            language,
-            isPrivate: false,
-            isBusinessMode,
-            aiMode, // Persist selection
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp()
-          }));
-          activeChatId = newChatRef.id;
-          setCurrentChatId(newChatRef.id);
-          localStorage.setItem("activeChatId", newChatRef.id);
-          
-          // Asynchronously check and archive old chats for the user if limit (50) is exceeded
-          archiveOldChats(auth.currentUser!.uid).catch((err) => {
-            console.error("Non-blocking error archiving old chats:", err);
-          });
-        }
-
-        if (filesToSend.length > 0) {
-           try {
-             // activeChatId is guaranteed to exist now
-             const uploadedFiles = await Promise.all(filesToSend.map(async (file) => {
-               const { fileUrl, storagePath } = await uploadChatFile(auth.currentUser!.uid, activeChatId || "temp", file.name, file.data);
-               return { name: file.name, type: file.type, fileUrl, storagePath };
-             }));
-             dbSafeUserMessage.files = uploadedFiles;
-           } catch (uploadError: any) {
-             if (uploadError.message !== "Storage_Not_Configured") {
-               console.error("Chat file upload error: ", uploadError);
-             }
-             dbSafeUserMessage.content = "[Fayl ilova qilingan, lekin xotiraga saqlanmadi.]\n" + dbSafeUserMessage.content;
-           }
-        }
-
-        dbSafeMessages.push(dbSafeUserMessage);
-
-        if (activeChatId) {
-          await setDoc(doc(db, "chats", activeChatId, "messages", dbSafeUserMessage.id), cleanFirestoreData({
-             ...dbSafeUserMessage,
-             createdAt: serverTimestamp()
-          }));
-          await updateDoc(doc(db, "chats", activeChatId), {
-            updatedAt: serverTimestamp(),
-            aiMode // Stay in sync
-          });
-        }
-
-        // Generate title asynchronously if it's a new chat (non-blocking)
-        if (!currentChatId) {
-          performanceTracker.trackApiCall("generateChatTitle");
-          generateChatTitle(userMessage.content, language).then(title => {
-            if (activeChatId) {
-              updateDoc(doc(db, "chats", activeChatId), { title });
-            }
-          }).catch(console.error);
-        }
-      }
-
-      // 2. Fetch AI response
+      // STEP 1 — CALL AI FIRST
       const history = messages.length > 1 ? messages.map(m => ({ role: m.role, content: m.content })) : [];
-      performanceTracker.trackApiCall("chatWithLawyer");
-      const response: any = await chatWithLawyer(userMessage.content, language, history, filesToSend, undefined, undefined, isBusinessMode, aiMode, setRetryMessage);
       
-      if (auth.currentUser) {
-        await incrementUserRequests(auth.currentUser.uid);
-        setRequestsCountToday(prev => prev + 1);
-      }
+      console.log("[Chat Send] AI request starting");
+      performanceTracker.trackApiCall("chatWithLawyer");
+      const response: any = await chatWithLawyer(
+        userMessage.content,
+        language,
+        history,
+        filesToSend,
+        undefined,
+        undefined,
+        isBusinessMode,
+        aiMode,
+        setRetryMessage
+      );
+      console.log("[Chat Send] AI request completed");
 
+      // STEP 2 — UPDATE UI IMMEDIATELY
       const isDocument = response?.type === "document";
       const chatContent = isDocument 
         ? "Hujjat yaratildi (o'ng tomondagi panelga qarang)." 
@@ -1191,7 +1258,6 @@ export function Consultation({ user }: { user: any }) {
         createdAt: Date.now() + 1
       };
       
-      const finalMessages = [...newMessages, assistantMessage];
       setMessages(prev => [...prev, assistantMessage]);
 
       // Cross-tab notification trigger (Non-blocking)
@@ -1207,34 +1273,42 @@ export function Consultation({ user }: { user: any }) {
         console.error("Non-blocking notification error:", notifyErr);
       }
 
-      if (shouldSaveToDb && activeChatId) {
-        dbSafeMessages.push(assistantMessage);
-        await setDoc(doc(db, "chats", activeChatId, "messages", assistantMessage.id), cleanFirestoreData({
-          ...assistantMessage,
-          createdAt: serverTimestamp()
-        }));
-        const updateData: any = {
-          updatedAt: serverTimestamp(),
-          aiMode // Stay in sync
-        };
-        if (isDocument && response?.content) updateData.document = response.content;
-        if (response?.analysis?.winningProbability != null) updateData.winningProbability = response.analysis.winningProbability;
-        if (response?.analysis?.riskLevel) updateData.riskLevel = response.analysis.riskLevel;
-        if (response?.analysis?.strengths) updateData.strengths = response.analysis.strengths;
-        if (response?.analysis?.weaknesses) updateData.weaknesses = response.analysis.weaknesses;
-        if (response?.analysis?.risk) updateData.risk = response.analysis.risk;
-        if (response?.analysis?.strategy) updateData.strategy = response.analysis.strategy;
-        if (response?.analysis?.expertise) updateData.expertise = response.analysis.expertise;
-        
-        await updateDoc(doc(db, "chats", activeChatId), updateData);
-
-        // Asynchronously check and archive old messages in this chat if limit (100) is exceeded
-        archiveOldMessages(activeChatId, auth.currentUser!.uid).catch((err) => {
-          console.error("Non-blocking error archiving old messages:", err);
+      // STEP 3 — PERSIST CHAT/FIRESTORE AFTERWARD (NON-BLOCKING)
+      if (!isPrivateMode && auth.currentUser) {
+        persistChatSafely({
+          userId: auth.currentUser.uid,
+          activeChatId,
+          userMessage,
+          assistantMessage,
+          filesToSend,
+          language,
+          isBusinessMode,
+          aiMode,
+          response,
+          isDocument,
+          onChatCreated: (newChatId: string) => {
+            activeChatId = newChatId;
+            setCurrentChatId(newChatId);
+            localStorage.setItem("activeChatId", newChatId);
+          }
+        }).catch((err) => {
+          const safeCode = err?.code || err?.name || "PERSISTENCE_ERROR";
+          console.warn(`[Chat Persistence] failed: ${safeCode}`);
         });
       }
 
     } catch (error: any) {
+      const safeErrorCode = error?.code || (error instanceof AIServerError ? String(error.status) : null) || error?.name || "AI_REQUEST_FAILED";
+      console.error(`[Chat Send] AI request failed: ${safeErrorCode}`);
+
+      // Handle server credit limit
+      if (error instanceof AIServerError || error?.name === "AIServerError") {
+        if (error.code === "AI_CREDIT_LIMIT" || error?.errorData?.code === "AI_CREDIT_LIMIT") {
+          openPaywall("requests");
+          return;
+        }
+      }
+
       errorLogger.log("chat_with_lawyer_submit", "GeminiAPIError", error, `Chat prompt submission failed: ${error.message || error}`);
       
       const friendlyMessage = getFriendlyErrorMessage(error, language);
@@ -1252,15 +1326,16 @@ export function Consultation({ user }: { user: any }) {
       }
       
       if (!isPrivateMode && auth.currentUser && activeChatId) {
-        await setDoc(doc(db, "chats", activeChatId, "messages", errorMessage.id), cleanFirestoreData({
-          ...errorMessage,
-          createdAt: serverTimestamp()
-        }));
-        
-        // Asynchronously check and archive old messages to ensure max 100 limit is respected
-        archiveOldMessages(activeChatId, auth.currentUser.uid).catch((err) => {
-          console.error("Non-blocking error archiving old messages:", err);
-        });
+        try {
+          await setDoc(doc(db, "chats", activeChatId, "messages", errorMessage.id), cleanFirestoreData({
+            ...errorMessage,
+            createdAt: serverTimestamp()
+          }));
+          archiveOldMessages(activeChatId, auth.currentUser.uid).catch(() => {});
+        } catch (persistErr: any) {
+          const safeCode = persistErr?.code || persistErr?.name || "PERSISTENCE_ERROR";
+          console.warn(`[Chat Persistence] failed: ${safeCode}`);
+        }
       }
     } finally {
       setIsLoading(false);
