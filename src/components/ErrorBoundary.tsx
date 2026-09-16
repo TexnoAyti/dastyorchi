@@ -122,9 +122,9 @@ export class ErrorBoundary extends Component<Props, State> {
               </button>
             </div>
 
-            {process.env.NODE_ENV !== "production" && this.state.error && (
+            {Boolean(import.meta.env?.DEV) && this.state.error && (
               <div className="mt-8 text-left bg-black/50 p-4 rounded-xl border border-white/5 overflow-auto text-[10px] font-mono text-amber-300 max-h-[160px] glass-scrollbar">
-                <span className="font-bold">Developer Stacktrace:</span>
+                <span className="font-bold">Developer Stacktrace (Dev Only):</span>
                 <p className="whitespace-pre mt-1">{this.state.error.stack}</p>
               </div>
             )}

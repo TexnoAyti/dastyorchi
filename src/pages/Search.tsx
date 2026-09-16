@@ -1,11 +1,12 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { db, auth } from "../firebase";
+import { onAuthStateChanged } from "firebase/auth";
 import { collection, query, where, onSnapshot, getDocs } from "firebase/firestore";
 import { handleFirestoreError, OperationType } from "../lib/firestore-error";
 import { 
   Search, Briefcase, FileText, MessageSquare, AlertTriangle, Lightbulb, 
-  ShieldCheck, FileEdit, ArrowRight, Loader2, Info, Compass, HelpCircle
+  ShieldCheck, FileEdit, ArrowRight, Loader2, Info, Compass, HelpCircle, RefreshCw
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { getDocumentCategory, getCategoryTheme } from "./Documents";
@@ -38,7 +39,7 @@ const LOCAL_TRANSLATIONS = {
     open: "Ochish",
     noResults: "Natijalar yo'q",
     noResultsSub: "Kiritilgan ibora bo'yicha hech qanday ish, hujjat, suhbat, yoki risk tahlillari topilmadi. Qisqaroq yoki boshqacharoq kalit so'zlar sinab ko'ring.",
-    startSearch: "Qidiruvni boshlang",
+    startSearch: "Qidirish uchun so‘z kiriting.",
     startSearchSub: "Qutiga ism, yuridik modda nomlanishi, shartnoma kodi yoki tahliliy argumentlarni yozib izlashni boshlashingiz mumkin.",
     case_folder: "Ish papqasi",
     unspecified_dispute: "Umumiy nizolar",
@@ -228,7 +229,7 @@ const LOCAL_TRANSLATIONS = {
   }
 };
 
-export function SearchPage() {
+export function SearchPage({ user }: { user?: any }) {
   const { language } = useLanguage();
   const lt = LOCAL_TRANSLATIONS[language] || LOCAL_TRANSLATIONS.uz_lat;
 
@@ -238,47 +239,93 @@ export function SearchPage() {
   const [cases, setCases] = useState<any[]>([]);
   const [documents, setDocuments] = useState<any[]>([]);
   const [chats, setChats] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [authReady, setAuthReady] = useState(Boolean(user?.uid || auth.currentUser?.uid));
+  const [activeUid, setActiveUid] = useState<string | null>(user?.uid || auth.currentUser?.uid || null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
+
+  // Sync auth state explicitly
+  useEffect(() => {
+    if (user?.uid) {
+      setActiveUid(user.uid);
+      setAuthReady(true);
+    }
+    const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
+      const resolvedUid = fbUser?.uid || user?.uid || null;
+      setActiveUid(resolvedUid);
+      setAuthReady(true);
+    });
+    return () => unsubAuth();
+  }, [user]);
 
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) {
+    if (!authReady) return;
+
+    if (!activeUid) {
       setLoading(false);
       return;
     }
 
     setLoading(true);
+    setLoadError(null);
+
+    const timeoutTimer = setTimeout(() => {
+      setLoading(false);
+    }, 4500);
+
+    let docsDone = false;
+    let casesDone = false;
+    let chatsDone = false;
+
+    const checkComplete = () => {
+      if (docsDone && casesDone && chatsDone) {
+        clearTimeout(timeoutTimer);
+        setLoading(false);
+      }
+    };
 
     // Fetch documents
-    const qDocs = query(collection(db, "documents"), where("userId", "==", uid));
+    const qDocs = query(collection(db, "documents"), where("userId", "==", activeUid));
     console.log("[Firestore] listener attached: Search Documents");
     const unsubscribeDocs = onSnapshot(qDocs, (snap) => {
       setDocuments(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      docsDone = true;
+      checkComplete();
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "documents");
+      console.error("[Firestore] search documents error:", error);
+      docsDone = true;
+      checkComplete();
     });
 
     // Fetch cases
-    const qCases = query(collection(db, "cases"), where("userId", "==", uid));
+    const qCases = query(collection(db, "cases"), where("userId", "==", activeUid));
     console.log("[Firestore] listener attached: Search Cases");
     const unsubscribeCases = onSnapshot(qCases, (snap) => {
       setCases(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      casesDone = true;
+      checkComplete();
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "cases");
+      console.error("[Firestore] search cases error:", error);
+      casesDone = true;
+      checkComplete();
     });
 
     // Fetch chats
-    const qChats = query(collection(db, "chats"), where("userId", "==", uid));
+    const qChats = query(collection(db, "chats"), where("userId", "==", activeUid));
     console.log("[Firestore] listener attached: Search Chats");
     const unsubscribeChats = onSnapshot(qChats, (snap) => {
       setChats(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-      setLoading(false);
+      chatsDone = true;
+      checkComplete();
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "chats");
-      setLoading(false);
+      console.error("[Firestore] search chats error:", error);
+      chatsDone = true;
+      checkComplete();
     });
 
     return () => {
+      clearTimeout(timeoutTimer);
       unsubscribeDocs();
       console.log("[Firestore] listener detached: Search Documents");
       unsubscribeCases();
@@ -286,7 +333,7 @@ export function SearchPage() {
       unsubscribeChats();
       console.log("[Firestore] listener detached: Search Chats");
     };
-  }, [auth.currentUser?.uid]);
+  }, [activeUid, authReady, retryKey]);
 
   const getDocDate = (item: any) => {
     if (item.createdAt?.seconds) return item.createdAt.seconds * 1000;
@@ -560,7 +607,20 @@ export function SearchPage() {
 
         {/* Results Container */}
         <div>
-          {loading ? (
+          {loadError ? (
+            <div className="flex flex-col items-center justify-center py-12 px-4 bg-white/70 backdrop-blur-md rounded-3xl border border-red-200 text-center">
+              <AlertTriangle className="w-8 h-8 text-red-500 mb-2" />
+              <h3 className="font-bold text-slate-800 text-sm">Qidiruv indekslarini yuklashda xatolik yuz berdi</h3>
+              <p className="text-slate-500 text-xs mt-1 mb-4">{loadError}</p>
+              <button
+                onClick={() => setRetryKey(k => k + 1)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Qayta urinish
+              </button>
+            </div>
+          ) : loading && searchQuery.trim().length >= 2 ? (
             <div className="flex flex-col items-center justify-center py-20 bg-white/40 backdrop-blur-md rounded-3xl border border-white/60">
               <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
               <p className="text-slate-400 font-semibold text-xs mt-3">{lt.loading}</p>

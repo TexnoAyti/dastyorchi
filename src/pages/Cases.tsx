@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { db, auth } from "../firebase";
+import { onAuthStateChanged } from "firebase/auth";
 import { 
   collection, query, where, onSnapshot, addDoc, doc, 
   updateDoc, deleteDoc, orderBy
@@ -25,9 +26,14 @@ import { generateResearchReport, saveResearchReport, deleteResearchReport } from
 import { errorLogger } from "../services/errorLoggingService";
 import { getFriendlyErrorMessage } from "../utils/errorFriendly";
 
-export function Cases() {
+export function Cases({ user }: { user?: any }) {
   const [cases, setCases] = useState<Case[]>([]);
   const [loading, setLoading] = useState(true);
+  const [authReady, setAuthReady] = useState(Boolean(user?.uid || auth.currentUser?.uid));
+  const [activeUid, setActiveUid] = useState<string | null>(user?.uid || auth.currentUser?.uid || null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
@@ -91,47 +97,90 @@ export function Cases() {
     setTimeout(() => setToast(null), 4000);
   };
 
-  // 1. Fetch Legal Cases for Active User
+  // Sync auth state explicitly
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
+    if (user?.uid) {
+      setActiveUid(user.uid);
+      setAuthReady(true);
+    }
+    const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
+      const resolvedUid = fbUser?.uid || user?.uid || null;
+      setActiveUid(resolvedUid);
+      setAuthReady(true);
+    });
+    return () => unsubAuth();
+  }, [user]);
+
+  // 1. Fetch Legal Cases for Active User with guaranteed termination and retry
+  useEffect(() => {
+    if (!authReady) return;
+
+    if (!activeUid) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setLoadError(null);
+
+    const timeoutTimer = setTimeout(() => {
+      setLoading(false);
+    }, 4500);
 
     const q = query(
       collection(db, "cases"),
-      where("userId", "==", uid)
+      where("userId", "==", activeUid)
     );
 
     console.log("[Firestore] listener attached: Cases List");
     const unsubscribe = onSnapshot(q, (snapshot) => {
+      clearTimeout(timeoutTimer);
       const docs = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as Case[];
       
       // Sort in-memory by updatedAt descending
-      docs.sort((a, b) => b.updatedAt - a.updatedAt);
+      docs.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
       setCases(docs);
+      setLoadError(null);
       setLoading(false);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "cases");
+    }, (error: any) => {
+      clearTimeout(timeoutTimer);
+      console.error("[Firestore] cases onSnapshot error:", error);
+      const isPermission = error?.code === "permission-denied" || error?.message?.includes("Missing or insufficient permissions");
+      const isIndex = error?.message?.includes("index");
+      if (isIndex) {
+        setLoadError(`Firestore composite index talab qilinmoqda: ${error.message}`);
+      } else if (isPermission) {
+        setLoadError("Ish materiallariga kirish ruxsati berilmadi (Ruxsat rad etildi).");
+      } else {
+        setLoadError("Ishlarni yuklashda tarmoq xatoligi yuz berdi.");
+      }
       setLoading(false);
     });
 
     return () => {
+      clearTimeout(timeoutTimer);
       unsubscribe();
       console.log("[Firestore] listener detached: Cases List");
     };
-  }, [auth.currentUser?.uid]);
+  }, [activeUid, authReady, retryKey]);
 
   // 1b. Sync Research Reports linked to Active Case
   useEffect(() => {
     const uid = auth.currentUser?.uid;
     if (!activeCaseId || !uid) {
       setCaseReports([]);
+      setLoadingCaseReports(false);
       return;
     }
 
     setLoadingCaseReports(true);
+    const timeoutTimer = setTimeout(() => {
+      setLoadingCaseReports(false);
+    }, 4500);
+
     const qReport = query(
       collection(db, "research_reports"),
       where("userId", "==", uid),
@@ -140,6 +189,7 @@ export function Cases() {
 
     console.log("[Firestore] listener attached: Case Research Reports");
     const unsubscribe = onSnapshot(qReport, (snapshot) => {
+      clearTimeout(timeoutTimer);
       const list = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
@@ -148,11 +198,13 @@ export function Cases() {
       setCaseReports(list);
       setLoadingCaseReports(false);
     }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, "research_reports");
+      clearTimeout(timeoutTimer);
+      console.error("[Firestore] research_reports onSnapshot error:", err);
       setLoadingCaseReports(false);
     });
 
     return () => {
+      clearTimeout(timeoutTimer);
       unsubscribe();
       console.log("[Firestore] listener detached: Case Research Reports");
     };
@@ -176,7 +228,7 @@ export function Cases() {
       }));
       setAllUserDocs(docs);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "documents");
+      console.error("[Firestore] cases user documents error:", error);
     });
 
     return () => {
@@ -965,6 +1017,30 @@ export function Cases() {
           {loading ? (
             <div className="flex items-center justify-center py-20">
               <Loader2 className="w-5 h-5 text-gray-400 dark:text-zinc-500 animate-spin" />
+            </div>
+          ) : loadError ? (
+            <div className="p-4 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/30 text-center my-4">
+              <AlertTriangle className="w-5 h-5 mx-auto text-red-500 mb-2" />
+              <p className="text-xs font-semibold text-red-800 dark:text-red-300 mb-2">Ishlarni yuklashda xatolik yuz berdi</p>
+              <button
+                onClick={() => setRetryKey(k => k + 1)}
+                className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold transition-all"
+              >
+                Qayta urinish
+              </button>
+            </div>
+          ) : cases.length === 0 ? (
+            <div className="text-center py-12 px-3 text-gray-400 select-none">
+              <Briefcase className="w-8 h-8 mx-auto text-gray-300 dark:text-zinc-700 mb-2" />
+              <p className="text-xs font-bold text-gray-700 dark:text-zinc-300">Hozircha ishlar yaratilmagan.</p>
+              <p className="text-[11px] text-gray-400 mt-1">Yangi huquqiy ish ochish uchun quyidagi tugmani bosing.</p>
+              <button
+                onClick={() => setIsModalOpen(true)}
+                className="mt-4 inline-flex items-center px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-xs gap-1 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Yangi ish yaratish
+              </button>
             </div>
           ) : filteredCases.length > 0 ? (
             filteredCases.map((c) => {

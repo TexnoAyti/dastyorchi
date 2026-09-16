@@ -4,6 +4,7 @@ import { LegalService } from "./legalService";
 import { pipelineTracker } from "../utils/pipelineTracker";
 import { auth } from "../firebase";
 import { getApiAuthorizationHeader, silentTelegramReauth } from "./apiAuth";
+import { safeBase64ToStringAsync } from "../utils/fileEncoding";
 
 const SYSTEM_INSTRUCTION = `You are an elite legal AI assistant for Uzbekistan.
 
@@ -637,7 +638,7 @@ If unsure -> default to:
         const base64Data = file.data.includes(',') ? file.data.split(',')[1] : file.data;
         if (file.type === 'text/plain' || file.name.endsWith('.docx') || file.name.endsWith('.pdf')) {
           try {
-            const decoded = decodeURIComponent(escape(atob(base64Data)));
+            const decoded = await safeBase64ToStringAsync(base64Data);
             if (decoded.includes("OCR processing required")) {
               pipelineTracker.update({ ocrFallbackTriggered: true });
               pipelineTracker.log('INPUT', 'OCR fallback triggered on file', file.name);

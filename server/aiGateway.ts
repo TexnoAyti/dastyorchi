@@ -421,6 +421,81 @@ export function resolveModel(operation: AIOperation, requestedModel?: string): s
 }
 
 /**
+ * Returns an ordered fallback chain of valid alternative models if the primary model is unavailable.
+ * Only genuine, supported Gemini models from the SDK catalogue are included.
+ */
+export function getFallbackModelChain(primaryModel: string, operation: AIOperation): string[] {
+  const chain: string[] = [primaryModel];
+
+  // Tailored candidates based on operation tier
+  const isStrongOp = operation === "reasoning" || operation === "document" || operation === "deep_analysis";
+  const candidates = isStrongOp
+    ? ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash"]
+    : ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-flash-latest"];
+
+  for (const candidate of candidates) {
+    if (!chain.includes(candidate)) {
+      chain.push(candidate);
+    }
+  }
+
+  return chain;
+}
+
+/**
+ * Validates whether an error represents a genuine model availability failure.
+ * Explicitly EXCLUDES rate limits (429), quota exhaustion, auth errors (401),
+ * safety blocks, and malformed client payloads.
+ */
+export function isModelUnavailableError(error: any): boolean {
+  if (!error) return false;
+  const errMsg = (error?.message || String(error)).toLowerCase();
+  const status = error?.status || error?.statusCode;
+
+  // Do NOT classify rate limit / quota exhaustion as model unavailable
+  if (
+    status === 429 ||
+    errMsg.includes("429") ||
+    errMsg.includes("quota") ||
+    errMsg.includes("resource_exhausted")
+  ) {
+    return false;
+  }
+
+  // Do NOT classify auth/credentials error as model unavailable
+  if (
+    status === 401 ||
+    errMsg.includes("api key") ||
+    errMsg.includes("api_key") ||
+    errMsg.includes("unauthenticated")
+  ) {
+    return false;
+  }
+
+  // Do NOT classify context overflow or invalid request as model unavailable
+  if (
+    status === 400 &&
+    (errMsg.includes("invalid argument") || errMsg.includes("context") || errMsg.includes("token"))
+  ) {
+    return false;
+  }
+
+  // Genuine model availability / not found / unsupported patterns:
+  return (
+    status === 404 ||
+    errMsg.includes("not found") ||
+    errMsg.includes("is not found for api version") ||
+    errMsg.includes("models/") ||
+    (errMsg.includes("model") && (
+      errMsg.includes("not supported") ||
+      errMsg.includes("unavailable") ||
+      errMsg.includes("unsupported") ||
+      errMsg.includes("not found")
+    ))
+  );
+}
+
+/**
  * Validates operation string against allowed types
  */
 export function validateOperation(op: any): AIOperation {

@@ -14,6 +14,8 @@ import {
   DEFAULT_TIER_LIMITS,
   getTashkentDateString,
   resolveModel,
+  getFallbackModelChain,
+  isModelUnavailableError,
   validateOperation,
   acquireAIRequestLock,
   releaseAIRequestLock,
@@ -1200,6 +1202,12 @@ apiRouter.post("/ai", async (req, res) => {
   const targetModel = resolveModel(operation, model);
   const creditCost = AI_CREDIT_COSTS[operation] || 1;
 
+  // Safe logging format mandated by prompt:
+  // [AI Model] operation=<operation> requested=<safe model> resolved=<safe model>
+  // Never log API keys or legal content.
+  const safeRequestedModel = model ? String(model).replace(/[^a-zA-Z0-9._-]/g, "") : "default";
+  console.log(`[AI Model] operation=${operation} requested=${safeRequestedModel} resolved=${targetModel}`);
+
   // Requirement 1 logging stages:
   console.log(`[AI Gateway] authenticated uid: ${userId}`);
   console.log(`[AI Gateway] operation: ${operation}`);
@@ -1333,7 +1341,7 @@ apiRouter.post("/ai", async (req, res) => {
       });
     }
 
-    // 3. Call Gemini API with timeout and cancellation
+    // 3. Call Gemini API with fallback chain, timeout and cancellation
     console.log("[AI Gateway] provider request start");
     const genAI = new GoogleGenAI({
       apiKey,
@@ -1345,29 +1353,62 @@ apiRouter.post("/ai", async (req, res) => {
       }
     });
 
-    const generatePromise = genAI.models.generateContent({
-      model: targetModel,
-      contents,
-      config: {
-        ...config,
-        maxOutputTokens: 8192,
-        systemInstruction,
-        abortSignal: abortController.signal
-      } as any
-    });
+    const modelChain = getFallbackModelChain(targetModel, operation);
+    let successfulModel = targetModel;
+    let result: any = null;
+    let lastModelError: any = null;
 
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      const t = setTimeout(() => {
-        isTimedOut = true;
-        console.log("[AI Gateway] provider timeout");
-        const err = new Error("PROVIDER_TIMEOUT");
-        (err as any).code = "PROVIDER_TIMEOUT";
-        reject(err);
-      }, PROVIDER_TIMEOUT_MS);
-      generatePromise.finally(() => clearTimeout(t));
-    });
+    for (let i = 0; i < modelChain.length; i++) {
+      const currentModelCandidate = modelChain[i];
+      if (isClientDisconnected || res.writableEnded) break;
 
-    const result = await Promise.race([generatePromise, timeoutPromise]);
+      try {
+        console.log(`[AI Gateway] Attempting model: ${currentModelCandidate} (try ${i + 1}/${modelChain.length})`);
+        
+        const generatePromise = genAI.models.generateContent({
+          model: currentModelCandidate,
+          contents,
+          config: {
+            ...config,
+            maxOutputTokens: 8192,
+            systemInstruction,
+            abortSignal: abortController.signal
+          } as any
+        });
+
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          const t = setTimeout(() => {
+            isTimedOut = true;
+            console.log("[AI Gateway] provider timeout");
+            const err = new Error("PROVIDER_TIMEOUT");
+            (err as any).code = "PROVIDER_TIMEOUT";
+            reject(err);
+          }, PROVIDER_TIMEOUT_MS);
+          generatePromise.finally(() => clearTimeout(t));
+        });
+
+        result = await Promise.race([generatePromise, timeoutPromise]);
+        successfulModel = currentModelCandidate;
+        lastModelError = null;
+        break; // Success, exit fallback chain
+      } catch (candidateErr: any) {
+        lastModelError = candidateErr;
+        const isModelUnavail = isModelUnavailableError(candidateErr);
+
+        if (isModelUnavail && i < modelChain.length - 1) {
+          console.log("[AI Model] primary unavailable, attempting fallback");
+          console.warn(`[AI Gateway] Model candidate '${currentModelCandidate}' unavailable. Advancing to fallback model...`);
+          continue;
+        } else {
+          // If error is not genuine model availability (e.g. rate limit, quota, auth, timeout) or chain exhausted, rethrow
+          throw candidateErr;
+        }
+      }
+    }
+
+    if (!result && lastModelError) {
+      throw lastModelError;
+    }
 
     if (timeoutTimer) {
       clearTimeout(timeoutTimer);
@@ -1388,7 +1429,7 @@ apiRouter.post("/ai", async (req, res) => {
 
     console.log("[AI Gateway] provider response status: 200");
     console.log("[AI Gateway] provider error category: NONE");
-    console.log("[AI Gateway] final response code: SUCCESS");
+    console.log(`[AI Gateway] final response code: SUCCESS (model: ${successfulModel})`);
 
     // 4. Token accounting from response usageMetadata
     const usageMetadata = (result as any).usageMetadata || {};
@@ -1412,7 +1453,7 @@ apiRouter.post("/ai", async (req, res) => {
         creditsUsedToday: reservation.creditsUsedToday,
         creditCost,
         requestId: reservation.requestId,
-        model: targetModel
+        model: successfulModel
       });
     }
   } catch (error: any) {
@@ -1512,12 +1553,7 @@ apiRouter.post("/ai", async (req, res) => {
       return;
     }
 
-    if (
-      errLower.includes("not found") ||
-      errLower.includes("is not found for api version") ||
-      errLower.includes("models/") ||
-      (errLower.includes("model") && (errLower.includes("not supported") || errLower.includes("unavailable") || errLower.includes("not found")))
-    ) {
+    if (isModelUnavailableError(error)) {
       console.log("[AI Gateway] provider response status: 503");
       console.log("[AI Gateway] provider error category: MODEL_NOT_AVAILABLE");
       console.log("[AI Gateway] final response code: MODEL_NOT_AVAILABLE");

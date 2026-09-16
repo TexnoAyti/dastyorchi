@@ -61,7 +61,7 @@ export const DocumentEditor = memo(function DocumentEditor({ content, onChange, 
     },
     editorProps: {
       attributes: {
-        class: 'prose dark:prose-invert prose-sm sm:prose lg:prose-lg xl:prose-2xl mx-auto focus:outline-none min-h-[400px] sm:min-h-[800px] bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 p-3 sm:p-12 shadow-sm border border-gray-200 dark:border-zinc-800 rounded-lg sm:rounded-none',
+        class: 'prose dark:prose-invert prose-sm sm:prose lg:prose-lg xl:prose-2xl mx-auto focus:outline-none min-h-[350px] sm:min-h-[800px] bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 p-4 sm:p-12 shadow-sm border border-gray-200 dark:border-zinc-800 rounded-xl sm:rounded-none break-words [overflow-wrap:anywhere] max-w-full leading-relaxed',
       },
     },
   });
@@ -269,100 +269,130 @@ export const DocumentEditor = memo(function DocumentEditor({ content, onChange, 
 
   return (
     <div 
-      className="flex flex-col h-full bg-gray-50 dark:bg-zinc-950 rounded-xl overflow-hidden border border-gray-200 dark:border-zinc-800 min-h-[450px] flex-1"
-      style={{ minHeight: "450px", border: "1px solid rgba(255,255,255,0.08)", display: "flex", flexDirection: "column", visibility: "visible", opacity: 1 }}
+      className="flex flex-col h-full bg-gray-50 dark:bg-zinc-950 rounded-xl overflow-hidden border border-gray-200 dark:border-zinc-800 flex-1 min-h-0"
+      style={{ border: "1px solid rgba(255,255,255,0.08)", display: "flex", flexDirection: "column", visibility: "visible", opacity: 1 }}
     >
-      {/* Toolbar */}
-      <div className="flex items-center justify-between gap-2 p-2 sm:p-3 bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800 overflow-x-auto no-scrollbar shrink-0">
-        <div className="flex items-center gap-1 shrink-0">
+      {/* Toolbar: Responsive dual-row on mobile, single row on desktop */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2 sm:p-3 bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800 shrink-0">
+        
+        {/* Row 1 on mobile: Quick action buttons (Imzolash, PDF, Word) */}
+        <div className="flex items-center justify-between sm:order-2 gap-1.5 w-full sm:w-auto">
+          <div className="flex items-center gap-1.5 w-full sm:w-auto">
+            <button
+              onClick={() => setIsSignModalOpen(true)}
+              disabled={isExporting}
+              className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-2 text-xs sm:text-sm font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-950/60 rounded-xl border border-emerald-200/60 dark:border-emerald-800/40 transition-all active:scale-95 disabled:opacity-50 cursor-pointer min-h-[40px]"
+            >
+              <PenTool className="w-3.5 h-3.5" />
+              <span>Imzolash</span>
+            </button>
+            <button
+              onClick={exportPDF}
+              disabled={isExporting}
+              className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-2 text-xs sm:text-sm font-semibold text-red-700 bg-red-50 hover:bg-red-100 dark:bg-red-950/40 dark:text-red-300 dark:hover:bg-red-950/60 rounded-xl border border-red-200/60 dark:border-red-800/40 transition-all active:scale-95 disabled:opacity-50 cursor-pointer min-h-[40px]"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>{isExporting ? '...' : 'PDF'}</span>
+            </button>
+            <button
+              onClick={exportDOCX}
+              disabled={isExporting}
+              className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-2 text-xs sm:text-sm font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/40 dark:text-blue-300 dark:hover:bg-blue-950/60 rounded-xl border border-blue-200/60 dark:border-blue-800/40 transition-all active:scale-95 disabled:opacity-50 cursor-pointer min-h-[40px]"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>{isExporting ? '...' : 'Word'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Row 2 on mobile, Left side on desktop: Formatting controls carousel */}
+        <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pb-0.5 sm:pb-0 sm:order-1 shrink-0 w-full sm:w-auto">
           <button
             onClick={() => editor.chain().focus().toggleBold().run()}
-            className={`p-2 rounded hover:bg-gray-100 dark:hover:bg-zinc-800 ${editor.isActive('bold') ? 'bg-gray-200 text-blue-600 dark:bg-zinc-700 dark:text-blue-400' : 'text-gray-600 dark:text-zinc-400'}`}
+            className={`p-2 rounded-lg transition-all min-w-[36px] min-h-[36px] flex items-center justify-center cursor-pointer ${editor.isActive('bold') ? 'bg-blue-100 text-blue-700 dark:bg-zinc-700 dark:text-blue-400 font-bold' : 'text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800'}`}
             title="Bold"
           >
             <Bold className="w-4 h-4" />
           </button>
           <button
             onClick={() => editor.chain().focus().toggleItalic().run()}
-            className={`p-2 rounded hover:bg-gray-100 dark:hover:bg-zinc-800 ${editor.isActive('italic') ? 'bg-gray-200 text-blue-600 dark:bg-zinc-700 dark:text-blue-400' : 'text-gray-600 dark:text-zinc-400'}`}
+            className={`p-2 rounded-lg transition-all min-w-[36px] min-h-[36px] flex items-center justify-center cursor-pointer ${editor.isActive('italic') ? 'bg-blue-100 text-blue-700 dark:bg-zinc-700 dark:text-blue-400 font-bold' : 'text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800'}`}
             title="Italic"
           >
             <Italic className="w-4 h-4" />
           </button>
           <button
             onClick={() => editor.chain().focus().toggleUnderline().run()}
-            className={`p-2 rounded hover:bg-gray-100 dark:hover:bg-zinc-800 ${editor.isActive('underline') ? 'bg-gray-200 text-blue-600 dark:bg-zinc-700 dark:text-blue-400' : 'text-gray-600 dark:text-zinc-400'}`}
+            className={`p-2 rounded-lg transition-all min-w-[36px] min-h-[36px] flex items-center justify-center cursor-pointer ${editor.isActive('underline') ? 'bg-blue-100 text-blue-700 dark:bg-zinc-700 dark:text-blue-400 font-bold' : 'text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800'}`}
             title="Underline"
           >
             <UnderlineIcon className="w-4 h-4" />
           </button>
           
-          <div className="w-px h-6 bg-gray-300 dark:bg-zinc-700 mx-1" />
+          <div className="w-px h-5 bg-gray-200 dark:bg-zinc-700 mx-1 shrink-0" />
           
           <button
             onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
-            className={`p-2 rounded hover:bg-gray-100 dark:hover:bg-zinc-800 ${editor.isActive('heading', { level: 1 }) ? 'bg-gray-200 text-blue-600 dark:bg-zinc-700 dark:text-blue-400' : 'text-gray-600 dark:text-zinc-400'}`}
+            className={`p-2 rounded-lg transition-all min-w-[36px] min-h-[36px] flex items-center justify-center cursor-pointer ${editor.isActive('heading', { level: 1 }) ? 'bg-blue-100 text-blue-700 dark:bg-zinc-700 dark:text-blue-400 font-bold' : 'text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800'}`}
             title="Heading 1"
           >
             <Heading1 className="w-4 h-4" />
           </button>
           <button
             onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
-            className={`p-2 rounded hover:bg-gray-100 dark:hover:bg-zinc-800 ${editor.isActive('heading', { level: 2 }) ? 'bg-gray-200 text-blue-600 dark:bg-zinc-700 dark:text-blue-400' : 'text-gray-600 dark:text-zinc-400'}`}
+            className={`p-2 rounded-lg transition-all min-w-[36px] min-h-[36px] flex items-center justify-center cursor-pointer ${editor.isActive('heading', { level: 2 }) ? 'bg-blue-100 text-blue-700 dark:bg-zinc-700 dark:text-blue-400 font-bold' : 'text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800'}`}
             title="Heading 2"
           >
             <Heading2 className="w-4 h-4" />
           </button>
           <button
             onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-            className={`p-2 rounded hover:bg-gray-100 dark:hover:bg-zinc-800 ${editor.isActive('heading', { level: 3 }) ? 'bg-gray-200 text-blue-600 dark:bg-zinc-700 dark:text-blue-400' : 'text-gray-600 dark:text-zinc-400'}`}
+            className={`p-2 rounded-lg transition-all min-w-[36px] min-h-[36px] flex items-center justify-center cursor-pointer ${editor.isActive('heading', { level: 3 }) ? 'bg-blue-100 text-blue-700 dark:bg-zinc-700 dark:text-blue-400 font-bold' : 'text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800'}`}
             title="Heading 3"
           >
             <Heading3 className="w-4 h-4" />
           </button>
 
-          <div className="w-px h-6 bg-gray-300 dark:bg-zinc-700 mx-1" />
+          <div className="w-px h-5 bg-gray-200 dark:bg-zinc-700 mx-1 shrink-0" />
 
           <button
             onClick={() => editor.chain().focus().setTextAlign('left').run()}
-            className={`p-2 rounded hover:bg-gray-100 dark:hover:bg-zinc-800 ${editor.isActive({ textAlign: 'left' }) ? 'bg-gray-200 text-blue-600 dark:bg-zinc-700 dark:text-blue-400' : 'text-gray-600 dark:text-zinc-400'}`}
+            className={`p-2 rounded-lg transition-all min-w-[36px] min-h-[36px] flex items-center justify-center cursor-pointer ${editor.isActive({ textAlign: 'left' }) ? 'bg-blue-100 text-blue-700 dark:bg-zinc-700 dark:text-blue-400 font-bold' : 'text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800'}`}
             title="Align Left"
           >
             <AlignLeft className="w-4 h-4" />
           </button>
           <button
             onClick={() => editor.chain().focus().setTextAlign('center').run()}
-            className={`p-2 rounded hover:bg-gray-100 dark:hover:bg-zinc-800 ${editor.isActive({ textAlign: 'center' }) ? 'bg-gray-200 text-blue-600 dark:bg-zinc-700 dark:text-blue-400' : 'text-gray-600 dark:text-zinc-400'}`}
+            className={`p-2 rounded-lg transition-all min-w-[36px] min-h-[36px] flex items-center justify-center cursor-pointer ${editor.isActive({ textAlign: 'center' }) ? 'bg-blue-100 text-blue-700 dark:bg-zinc-700 dark:text-blue-400 font-bold' : 'text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800'}`}
             title="Align Center"
           >
             <AlignCenter className="w-4 h-4" />
           </button>
           <button
             onClick={() => editor.chain().focus().setTextAlign('right').run()}
-            className={`p-2 rounded hover:bg-gray-100 dark:hover:bg-zinc-800 ${editor.isActive({ textAlign: 'right' }) ? 'bg-gray-200 text-blue-600 dark:bg-zinc-700 dark:text-blue-400' : 'text-gray-600 dark:text-zinc-400'}`}
+            className={`p-2 rounded-lg transition-all min-w-[36px] min-h-[36px] flex items-center justify-center cursor-pointer ${editor.isActive({ textAlign: 'right' }) ? 'bg-blue-100 text-blue-700 dark:bg-zinc-700 dark:text-blue-400 font-bold' : 'text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800'}`}
             title="Align Right"
           >
             <AlignRight className="w-4 h-4" />
           </button>
 
-          <div className="w-px h-6 bg-gray-300 dark:bg-zinc-700 mx-1 hidden sm:block" />
-
-          {/* Zoom Controls */}
-          <div className="flex items-center bg-gray-50 dark:bg-zinc-950 rounded-xl p-1 border border-gray-200/80 dark:border-zinc-800/85 shadow-sm" title="Ko'rinish masshtabi">
+          {/* Desktop Zoom Controls */}
+          <div className="hidden md:flex items-center ml-2 bg-gray-50 dark:bg-zinc-950 rounded-xl p-0.5 border border-gray-200/80 dark:border-zinc-800/85 shadow-2xs" title="Ko'rinish masshtabi">
             <button
-               type="button"
+              type="button"
               onClick={() => {
                 const next = Math.max(zoom - 10, 50);
                 setZoom(next);
                 sessionStorage.setItem("editor_zoom", next.toString());
               }}
-              className="p-1.5 text-gray-500 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-gray-200/50 dark:hover:bg-zinc-800 rounded-lg transition-all cursor-pointer disabled:opacity-40"
+              className="p-1 text-gray-500 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-gray-200/50 dark:hover:bg-zinc-800 rounded-lg transition-all cursor-pointer disabled:opacity-40"
               title="Kichiklashtirish (-)"
               disabled={zoom <= 50}
             >
-              <ZoomOut className="w-4 h-4" />
+              <ZoomOut className="w-3.5 h-3.5" />
             </button>
-            <span className="text-xs font-mono font-bold text-gray-700 dark:text-zinc-300 px-2 min-w-[42px] text-center select-none">
+            <span className="text-[11px] font-mono font-bold text-gray-700 dark:text-zinc-300 px-1.5 min-w-[36px] text-center select-none">
               {zoom}%
             </span>
             <button
@@ -372,49 +402,32 @@ export const DocumentEditor = memo(function DocumentEditor({ content, onChange, 
                 setZoom(next);
                 sessionStorage.setItem("editor_zoom", next.toString());
               }}
-              className="p-1.5 text-gray-500 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-gray-200/50 dark:hover:bg-zinc-800 rounded-lg transition-all cursor-pointer disabled:opacity-40"
+              className="p-1 text-gray-500 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-gray-200/50 dark:hover:bg-zinc-800 rounded-lg transition-all cursor-pointer disabled:opacity-40"
               title="Kattalashtirish (+)"
               disabled={zoom >= 150}
             >
-              <ZoomIn className="w-4 h-4" />
+              <ZoomIn className="w-3.5 h-3.5" />
             </button>
           </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setIsSignModalOpen(true)}
-            disabled={isExporting}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-emerald-600 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/20 dark:text-emerald-400 dark:hover:bg-emerald-950/40 rounded-lg transition-colors disabled:opacity-50"
-          >
-            <PenTool className="w-4 h-4" />
-            Imzolash
-          </button>
-          <button
-            onClick={exportPDF}
-            disabled={isExporting}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 dark:bg-red-950/20 dark:text-red-400 dark:hover:bg-red-950/40 rounded-lg transition-colors disabled:opacity-50"
-          >
-            <FileText className="w-4 h-4" />
-            {isExporting ? 'Yuklanmoqda...' : 'PDF'}
-          </button>
-          <button
-            onClick={exportDOCX}
-            disabled={isExporting}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/20 dark:text-blue-400 dark:hover:bg-blue-950/40 rounded-lg transition-colors disabled:opacity-50"
-          >
-            <Download className="w-4 h-4" />
-            {isExporting ? 'Yuklanmoqda...' : 'Word'}
-          </button>
         </div>
       </div>
 
       {/* Editor Area */}
-      <div className="flex-1 overflow-y-auto p-2 sm:p-8 bg-gray-100 dark:bg-zinc-950">
+      <div 
+        className="flex-1 overflow-y-auto p-2 sm:p-6 md:p-8 bg-gray-100 dark:bg-zinc-950 overscroll-contain pb-24 sm:pb-8"
+        onClick={() => {
+          if (editor && !editor.isFocused) {
+            editor.commands.focus('end');
+          }
+        }}
+      >
         <div 
           className="w-full max-w-full sm:max-w-[210mm] mx-auto transition-all duration-200 ease-in-out" 
           ref={editorRef}
-          style={{ zoom: `${zoom}%`, transformOrigin: 'top center' }}
+          style={{ 
+            zoom: typeof window !== 'undefined' && window.innerWidth < 640 ? '100%' : `${zoom}%`, 
+            transformOrigin: 'top center' 
+          }}
         >
           <EditorContent editor={editor} />
         </div>

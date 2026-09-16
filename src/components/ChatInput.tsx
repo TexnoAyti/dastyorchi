@@ -1,11 +1,72 @@
 import React, { useState, useRef, useEffect, useImperativeHandle, forwardRef } from "react";
-import { Paperclip, X, Mic, MicOff, Send, FileText } from "lucide-react";
+import { Paperclip, X, Mic, MicOff, Send, FileText, Loader2 } from "lucide-react";
 import { Language } from "../types";
 import { extractRawText } from "mammoth";
 import * as pdfjsLib from "pdfjs-dist";
+import { safeStringToBase64Async } from "../utils/fileEncoding";
 
 // Standardize PDF.js worker CDN for inline extraction
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, fallbackValue: T): Promise<T> {
+  let timer: any;
+  const timeoutPromise = new Promise<T>((resolve) => {
+    timer = setTimeout(() => {
+      console.warn(`[ChatInput] Task timed out after ${ms}ms`);
+      resolve(fallbackValue);
+    }, ms);
+  });
+  return Promise.race([
+    promise.then((res) => {
+      clearTimeout(timer);
+      return res;
+    }),
+    timeoutPromise
+  ]);
+}
+
+async function resizeImageIfNeeded(file: File, maxDim: number = 1400, quality: number = 0.8): Promise<string> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width <= maxDim && height <= maxDim && file.size < 1.5 * 1024 * 1024) {
+          resolve(e.target!.result as string);
+          return;
+        }
+        if (width > height) {
+          if (width > maxDim) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          }
+        } else {
+          if (height > maxDim) {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL("image/jpeg", quality));
+        } else {
+          resolve(e.target!.result as string);
+        }
+      };
+      img.onerror = () => {
+        resolve(e.target?.result as string || "");
+      };
+      img.src = e.target!.result as string;
+    };
+    reader.onerror = () => resolve("");
+    reader.readAsDataURL(file);
+  });
+}
 
 export interface ChatInputRef {
   setInputValue: (val: string) => void;
@@ -36,6 +97,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
 }, ref) => {
   const [input, setInput] = useState("");
   const [isRecording, setIsRecording] = useState(false);
+  const [isProcessingFiles, setIsProcessingFiles] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<Array<{ name: string; type: string; data: string }>>([]);
   const [speechError, setSpeechError] = useState<string | null>(null);
 
@@ -163,79 +225,131 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files) return;
+    if (!files || files.length === 0) return;
 
-    for (const file of Array.from(files)) {
-      if (file.name.endsWith('.doc')) {
-        alert("Eski .doc formati qo'llab-quvvatlanmaydi. Iltimos .docx yoki .pdf formatida yuklang.");
-        continue;
-      }
+    setIsProcessingFiles(true);
 
-      if (file.name.endsWith('.docx') || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-        try {
-          const arrayBuffer = await file.arrayBuffer();
-          const result = await extractRawText({ arrayBuffer });
-          const base64 = btoa(unescape(encodeURIComponent(result.value)));
-          
-          setSelectedFiles(prev => [...prev, {
-            name: file.name,
-            type: 'text/plain',
-            data: `data:text/plain;base64,${base64}`
-          }]);
-        } catch (error) {
-          console.error("DOCX xatosi:", error);
-          alert(`${file.name} hujjatini o'qishda xatolik yuz berdi.`);
+    try {
+      for (const file of Array.from(files)) {
+        // Enforce max size limit (15MB) to protect Telegram mobile memory
+        if (file.size > 15 * 1024 * 1024) {
+          alert(`${file.name}: Fayl hajmi 15MB dan oshmasligi kerak.`);
+          continue;
         }
-      } else if (file.name.toLowerCase().endsWith('.pdf') || file.type === "application/pdf") {
-        try {
-          const arrayBuffer = await file.arrayBuffer();
-          const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-          let textContent = "";
-          for (let i = 1; i <= pdf.numPages; i++) {
-            const page = await pdf.getPage(i);
-            const textObj = await page.getTextContent();
-            const pageText = textObj.items.map((item: any) => item.str).join(" ");
-            textContent += pageText + "\n";
-          }
-          
-          const hasAlphaNumeric = /[a-zA-Z0-9\u0400-\u04FF]/.test(textContent);
-          if (!textContent.trim() || !hasAlphaNumeric) {
-            textContent = "PDF contains no extractable text. OCR processing required.";
-          }
-          
-          const base64 = btoa(unescape(encodeURIComponent(textContent)));
-          
-          setSelectedFiles(prev => [...prev, {
-            name: file.name,
-            type: 'text/plain',
-            data: `data:text/plain;base64,${base64}`
-          }]);
-        } catch (error) {
-          console.error("PDF xatosi:", error);
-          const base64Fail = btoa(unescape(encodeURIComponent("PDF contains no extractable text. OCR processing required.")));
-          setSelectedFiles(prev => [...prev, {
-            name: file.name,
-            type: 'text/plain',
-            data: `data:text/plain;base64,${base64Fail}`
-          }]);
+
+        if (file.name.endsWith('.doc')) {
+          alert("Eski .doc formati qo'llab-quvvatlanmaydi. Iltimos .docx yoki .pdf formatida yuklang.");
+          continue;
         }
-      } else {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          if (event.target?.result) {
+
+        // Allow UI to breathe before processing each file
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        if (file.name.endsWith('.docx') || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+          try {
+            const arrayBuffer = await file.arrayBuffer();
+            const docxPromise = (async () => {
+              const result = await extractRawText({ arrayBuffer });
+              return result.value || "";
+            })();
+            
+            const extractedText = await withTimeout(docxPromise, 6000, "");
+            const base64 = await safeStringToBase64Async(extractedText || "Hujjat matnini o'qib bo'lmadi.");
+            
             setSelectedFiles(prev => [...prev, {
               name: file.name,
-              type: file.type,
-              data: event.target!.result as string
+              type: 'text/plain',
+              data: `data:text/plain;base64,${base64}`
+            }]);
+          } catch (error) {
+            console.error("DOCX xatosi:", error);
+            alert(`${file.name} hujjatini o'qishda xatolik yuz berdi.`);
+          }
+        } else if (file.name.toLowerCase().endsWith('.pdf') || file.type === "application/pdf") {
+          try {
+            const arrayBuffer = await file.arrayBuffer();
+            
+            const pdfPromise = (async () => {
+              const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+              let textContent = "";
+              const maxPages = Math.min(pdf.numPages, 30);
+              for (let i = 1; i <= maxPages; i++) {
+                const page = await pdf.getPage(i);
+                const textObj = await page.getTextContent();
+                const pageText = textObj.items.map((item: any) => item.str).join(" ");
+                textContent += pageText + "\n";
+                if (i % 3 === 0) {
+                  await new Promise((r) => setTimeout(r, 5));
+                }
+              }
+              return textContent;
+            })();
+
+            const extractedContent = await withTimeout(pdfPromise, 8000, "");
+            
+            let finalContent = extractedContent;
+            const hasAlphaNumeric = /[a-zA-Z0-9\u0400-\u04FF]/.test(finalContent);
+            if (!finalContent.trim() || !hasAlphaNumeric) {
+              finalContent = "PDF contains no extractable text. OCR processing required.";
+            }
+            
+            const base64 = await safeStringToBase64Async(finalContent);
+            
+            setSelectedFiles(prev => [...prev, {
+              name: file.name,
+              type: 'text/plain',
+              data: `data:text/plain;base64,${base64}`
+            }]);
+          } catch (error) {
+            console.error("PDF xatosi:", error);
+            const base64Fail = await safeStringToBase64Async("PDF contains no extractable text. OCR processing required.");
+            setSelectedFiles(prev => [...prev, {
+              name: file.name,
+              type: 'text/plain',
+              data: `data:text/plain;base64,${base64Fail}`
             }]);
           }
-        };
-        reader.readAsDataURL(file);
+        } else if (file.type.startsWith("image/")) {
+          // Compress and downscale images to avoid mobile memory blowout
+          try {
+            const compressed = await withTimeout(resizeImageIfNeeded(file, 1400, 0.82), 6000, "");
+            if (compressed) {
+              setSelectedFiles(prev => [...prev, {
+                name: file.name,
+                type: 'image/jpeg',
+                data: compressed
+              }]);
+            }
+          } catch (imgErr) {
+            console.error("Rasm qayta ishlash xatosi:", imgErr);
+          }
+        } else {
+          // Standard text / file reader with timeout
+          try {
+            const readPromise = new Promise<string>((resolve) => {
+              const reader = new FileReader();
+              reader.onload = (event) => resolve((event.target?.result as string) || "");
+              reader.onerror = () => resolve("");
+              reader.readAsDataURL(file);
+            });
+            const resultData = await withTimeout(readPromise, 5000, "");
+            if (resultData) {
+              setSelectedFiles(prev => [...prev, {
+                name: file.name,
+                type: file.type || 'application/octet-stream',
+                data: resultData
+              }]);
+            }
+          } catch (readErr) {
+            console.error("Fayl o'qish xatosi:", readErr);
+          }
+        }
       }
-    }
-    
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
+    } finally {
+      setIsProcessingFiles(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -298,10 +412,16 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
         />
         <button
           type="button"
+          disabled={isProcessingFiles || isLoading}
           onClick={() => fileInputRef.current?.click()}
-          className="p-2.5 sm:p-3 min-w-[40px] sm:min-w-[44px] min-h-[44px] rounded-[16px] flex items-center justify-center transition-all bg-white/60 hover:bg-white/90 text-blue-600 shadow-sm border border-white/50 cursor-pointer shrink-0"
+          className="p-2.5 sm:p-3 min-w-[40px] sm:min-w-[44px] min-h-[44px] rounded-[16px] flex items-center justify-center transition-all bg-white/60 hover:bg-white/90 text-blue-600 shadow-sm border border-white/50 cursor-pointer shrink-0 disabled:opacity-50"
+          title={isProcessingFiles ? "Fayl qayta ishlanmoqda..." : "Fayl biriktirish"}
         >
-          <Paperclip className="w-4 sm:w-5 h-4 sm:h-5" />
+          {isProcessingFiles ? (
+            <Loader2 className="w-4 sm:w-5 h-4 sm:h-5 animate-spin text-blue-600" />
+          ) : (
+            <Paperclip className="w-4 sm:w-5 h-4 sm:h-5" />
+          )}
         </button>
         <button
           type="button"

@@ -107,13 +107,13 @@ function AppContent({ user, onLogout, onDevLogin, devLoading, authError, isNotMi
       <Route path="/chat" element={<Consultation user={user} />} />
       <Route path="/login" element={<Navigate to="/" replace />} />
       <Route path="/dashboard" element={<Dashboard />} />
-      <Route path="/cases" element={<Cases />} />
+      <Route path="/cases" element={<Cases user={user} />} />
       <Route path="/research" element={<Research />} />
       <Route path="/evidence" element={<EvidencePage />} />
       <Route path="/timeline" element={<TimelinePage />} />
-      <Route path="/documents" element={<DocumentsPage />} />
+      <Route path="/documents" element={<DocumentsPage user={user} />} />
       <Route path="/templates" element={<TemplatesLibrary />} />
-      <Route path="/search" element={<SearchPage />} />
+      <Route path="/search" element={<SearchPage user={user} />} />
       <Route path="/activity" element={<ActivityPage />} />
       <Route path="/calendar" element={<CalendarPage />} />
       <Route path="/language" element={<LanguageCenter />} />

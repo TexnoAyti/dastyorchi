@@ -10,6 +10,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { DOCUMENT_TEMPLATES } from "../constants";
 import { cn } from "@/src/lib/utils";
 import { db, auth } from "../firebase";
+import { onAuthStateChanged } from "firebase/auth";
 import {
   collection, query, where, orderBy, onSnapshot, deleteDoc, doc,
   limit, updateDoc, addDoc, getDocs
@@ -131,7 +132,7 @@ export const getCategoryTheme = (category: string) => {
   }
 };
 
-export function DocumentsPage() {
+export function DocumentsPage({ user }: { user?: any }) {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("Barchasi");
@@ -147,6 +148,10 @@ export function DocumentsPage() {
   const [documents, setDocuments] = useState<any[]>([]);
   const [cases, setCases] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [authReady, setAuthReady] = useState(Boolean(user?.uid || auth.currentUser?.uid));
+  const [activeUid, setActiveUid] = useState<string | null>(user?.uid || auth.currentUser?.uid || null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
 
   const [toast, setToast] = useState<{ message: string; type: "success" | "info" | "error"; visible: boolean }>({
     message: "",
@@ -161,56 +166,95 @@ export function DocumentsPage() {
     }, 4000);
   };
 
+  // Sync auth state explicitly
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) {
+    if (user?.uid) {
+      setActiveUid(user.uid);
+      setAuthReady(true);
+    }
+    const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
+      const resolvedUid = fbUser?.uid || user?.uid || null;
+      setActiveUid(resolvedUid);
+      setAuthReady(true);
+    });
+    return () => unsubAuth();
+  }, [user]);
+
+  // Fetch Documents with explicit auth readiness and error safety
+  useEffect(() => {
+    if (!authReady) {
+      // Waiting for auth readiness
+      return;
+    }
+
+    if (!activeUid) {
+      // User is not signed in
       setLoading(false);
       return;
     }
 
+    setLoading(true);
+    setLoadError(null);
+
+    // Defensive safety timeout: never hang the UI
+    const timeoutTimer = setTimeout(() => {
+      setLoading(false);
+    }, 4500);
+
     const q = query(
       collection(db, "documents"),
-      where("userId", "==", uid),
-      orderBy("createdAt", "desc"),
+      where("userId", "==", activeUid),
       limit(100)
     );
 
     console.log("[Firestore] listener attached: Documents List");
     const unsubscribe = onSnapshot(q, (snapshot) => {
+      clearTimeout(timeoutTimer);
       const docs = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
       setDocuments(docs);
+      setLoadError(null);
       setLoading(false);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "documents");
+    }, (error: any) => {
+      clearTimeout(timeoutTimer);
+      console.error("[Firestore] documents onSnapshot error:", error);
+      const isPermission = error?.code === "permission-denied" || error?.message?.includes("Missing or insufficient permissions");
+      const isIndex = error?.message?.includes("index");
+      if (isIndex) {
+        setLoadError(`Firestore composite index talab qilinmoqda: ${error.message}`);
+      } else if (isPermission) {
+        setLoadError("Hujjatlarga kirish uchun ruxsat berilmadi (Ruxsat rad etildi).");
+      } else {
+        setLoadError("Hujjatlarni yuklashda tarmoq xatoligi yuz berdi.");
+      }
       setLoading(false);
     });
 
     return () => {
+      clearTimeout(timeoutTimer);
       unsubscribe();
       console.log("[Firestore] listener detached: Documents List");
     };
-  }, [auth.currentUser?.uid]);
+  }, [activeUid, authReady, retryKey]);
 
   // Fetch Cases for linking dropdown
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
-    const qCases = query(collection(db, "cases"), where("userId", "==", uid));
+    if (!activeUid) return;
+    const qCases = query(collection(db, "cases"), where("userId", "==", activeUid));
     console.log("[Firestore] listener attached: Documents Cases Link");
     const unsubscribe = onSnapshot(qCases, (snapshot) => {
       const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setCases(items);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "cases");
+      console.error("[Firestore] cases link onSnapshot error:", error);
     });
     return () => {
       unsubscribe();
       console.log("[Firestore] listener detached: Documents Cases Link");
     };
-  }, [auth.currentUser?.uid]);
+  }, [activeUid]);
 
   const getDocDate = (doc: any) => {
     if (doc.createdAt?.seconds) return doc.createdAt.seconds * 1000;
@@ -374,6 +418,27 @@ export function DocumentsPage() {
       <div className="min-h-[70vh] flex flex-col items-center justify-center bg-slate-50/50 dark:bg-zinc-950/50">
         <Loader2 className="w-12 h-12 text-blue-600 animate-spin" />
         <p className="mt-4 text-sm font-semibold text-gray-500 dark:text-zinc-400 font-sans tracking-wide">Hujjatlar yuklanmoqda...</p>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="min-h-[70vh] flex flex-col items-center justify-center p-6 bg-slate-50/50 dark:bg-zinc-950/50">
+        <div className="max-w-md w-full p-6 rounded-2xl bg-white dark:bg-zinc-900 border border-red-200 dark:border-red-900/40 text-center shadow-lg">
+          <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-red-100 dark:bg-red-950/40 text-red-600 flex items-center justify-center">
+            <AlertTriangle className="w-6 h-6" />
+          </div>
+          <h2 className="text-base font-bold text-gray-900 dark:text-zinc-100 mb-2">Hujjatlarni yuklashda xatolik yuz berdi</h2>
+          <p className="text-xs text-gray-500 dark:text-zinc-400 mb-6">{loadError}</p>
+          <button
+            onClick={() => setRetryKey(k => k + 1)}
+            className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Qayta urinish
+          </button>
+        </div>
       </div>
     );
   }
@@ -747,24 +812,30 @@ export function DocumentsPage() {
                   <div className="w-16 h-16 bg-slate-100 dark:bg-zinc-800 rounded-full flex items-center justify-center mx-auto mb-4">
                     <FileText className="w-8 h-8 text-slate-400 dark:text-zinc-500" />
                   </div>
-                  <h3 className="font-bold text-slate-800 dark:text-zinc-200 text-sm">Hujjatlar topilmadi</h3>
+                  <h3 className="font-bold text-slate-800 dark:text-zinc-200 text-sm">
+                    {documents.length === 0 ? "Hozircha hujjatlar yo‘q." : "Hujjatlar topilmadi"}
+                  </h3>
                   <p className="text-slate-400 dark:text-zinc-400 text-xs mt-1 max-w-xs mx-auto">
-                    Kategoriya yoki so'rovga mos hujjat saqlanmagan. Iltimos barchasini ko'rish yoki yangi loyiha yaratish uchun tugmani bosing.
+                    {documents.length === 0
+                      ? "Yangi huquqiy hujjat yaratish uchun pastdagi tugmani bosing."
+                      : "Kategoriya yoki so'rovga mos hujjat saqlanmagan. Iltimos barchasini ko'rish yoki yangi loyiha yaratish uchun tugmani bosing."}
                   </p>
                   
                   <div className="mt-6 flex justify-center gap-3">
-                    <button
-                      onClick={() => {
-                        setSelectedCategory("Barchasi");
-                        setSearchQuery("");
-                      }}
-                      className="px-4 py-2 border border-slate-200 dark:border-zinc-700 text-xs font-semibold rounded-xl text-slate-600 dark:text-zinc-300 bg-white dark:bg-zinc-900 hover:bg-slate-50 dark:hover:bg-zinc-800 transition-all cursor-pointer"
-                    >
-                      Kategoriyani tozalash
-                    </button>
+                    {documents.length > 0 && (
+                      <button
+                        onClick={() => {
+                          setSelectedCategory("Barchasi");
+                          setSearchQuery("");
+                        }}
+                        className="px-4 py-2 border border-slate-200 dark:border-zinc-700 text-xs font-semibold rounded-xl text-slate-600 dark:text-zinc-300 bg-white dark:bg-zinc-900 hover:bg-slate-50 dark:hover:bg-zinc-800 transition-all cursor-pointer"
+                      >
+                        Kategoriyani tozalash
+                      </button>
+                    )}
                     <button
                       onClick={() => setIsSelectorOpen(true)}
-                      className="px-4 py-2 text-xs font-bold rounded-xl text-white bg-blue-600 hover:bg-blue-700 transition-all shadow-xs"
+                      className="px-4 py-2 text-xs font-bold rounded-xl text-white bg-blue-600 hover:bg-blue-700 transition-all shadow-xs cursor-pointer"
                     >
                       Hujjat yaratish
                     </button>
