@@ -30,6 +30,7 @@ import { requestNotificationPermission, triggerStartupTestNotification } from ".
 import { NotificationProvider } from "./contexts/NotificationContext";
 import { PaywallProvider } from "./contexts/PaywallContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { AuthProvider } from "./contexts/AuthContext";
 import { 
   getTelegramWebApp, 
   isTelegramWebAppEnvironment, 
@@ -387,16 +388,18 @@ export default function App() {
       <ThemeProvider>
         <NotificationProvider>
           <PaywallProvider>
-            <Router>
-              <AppContent 
-                user={user} 
-                onLogout={handleLogout}
-                onDevLogin={handleDevLogin}
-                devLoading={devLoading}
-                authError={authError}
-                isNotMiniApp={isNotMiniApp}
-              />
-            </Router>
+            <AuthProvider currentUser={user}>
+              <Router>
+                <AppContent 
+                  user={user} 
+                  onLogout={handleLogout}
+                  onDevLogin={handleDevLogin}
+                  devLoading={devLoading}
+                  authError={authError}
+                  isNotMiniApp={isNotMiniApp}
+                />
+              </Router>
+            </AuthProvider>
           </PaywallProvider>
         </NotificationProvider>
       </ThemeProvider>

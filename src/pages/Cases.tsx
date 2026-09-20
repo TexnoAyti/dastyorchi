@@ -25,12 +25,15 @@ import { EvidenceAnalyzer } from "../components/EvidenceAnalyzer";
 import { generateResearchReport, saveResearchReport, deleteResearchReport } from "../services/researchService";
 import { errorLogger } from "../services/errorLoggingService";
 import { getFriendlyErrorMessage } from "../utils/errorFriendly";
+import { useAuth } from "../contexts/AuthContext";
 
 export function Cases({ user }: { user?: any }) {
+  const authContext = useAuth();
+  const activeUid = user?.uid || authContext.uid || auth.currentUser?.uid || null;
+  const authReady = authContext.authReady || Boolean(activeUid);
+
   const [cases, setCases] = useState<Case[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [authReady, setAuthReady] = useState(Boolean(user?.uid || auth.currentUser?.uid));
-  const [activeUid, setActiveUid] = useState<string | null>(user?.uid || auth.currentUser?.uid || null);
+  const [loading, setLoading] = useState(Boolean(activeUid));
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
 
@@ -97,25 +100,15 @@ export function Cases({ user }: { user?: any }) {
     setTimeout(() => setToast(null), 4000);
   };
 
-  // Sync auth state explicitly
-  useEffect(() => {
-    if (user?.uid) {
-      setActiveUid(user.uid);
-      setAuthReady(true);
-    }
-    const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
-      const resolvedUid = fbUser?.uid || user?.uid || null;
-      setActiveUid(resolvedUid);
-      setAuthReady(true);
-    });
-    return () => unsubAuth();
-  }, [user]);
-
   // 1. Fetch Legal Cases for Active User with guaranteed termination and retry
   useEffect(() => {
-    if (!authReady) return;
+    if (!authReady) {
+      const timer = setTimeout(() => setLoading(false), 2000);
+      return () => clearTimeout(timer);
+    }
 
     if (!activeUid) {
+      setCases([]);
       setLoading(false);
       return;
     }
@@ -720,9 +713,13 @@ export function Cases({ user }: { user?: any }) {
         Dalillar: ${JSON.stringify(activeCase.evidence || [])}
 
         Iltimos jild bo'yicha tahliliy diagnostika qiling. 
+        O'zbekiston Respublikasi qonunchiligiga qat'iy muvofiq, hech qachon to'qima moddalar yoki soxta sud amaliyotini o'ylab topmang.
+        G'alabani kafolatlamang, balki jarayonga protsessual tayyorgarlik darajasini (proceduralReadiness: 0-100) va yetishmayotgan ma'lumotlarni (missingInformation) aniqlang.
         Natija JSON formatida qaytsin, mutlaq faqat ushbu JSON kabi shaklga ega bo'lsin:
         {
-          "winningProbability": 75,
+          "proceduralReadiness": 75,
+          "evidenceStrength": "Kuchli",
+          "missingInformation": ["shartnoma nusxasi", "to'lov kvitansiyasi"],
           "riskLevel": "Medium",
           "strengths": ["..", ".."],
           "weaknesses": ["..", ".."],
@@ -737,8 +734,11 @@ export function Cases({ user }: { user?: any }) {
       });
       
       // Parse response cleanly
-      let payload = {
+      let payload: any = {
+        proceduralReadiness: 55,
         winningProbability: 55,
+        evidenceStrength: "O'rta",
+        missingInformation: [],
         riskLevel: "Medium",
         strengths: ["Ma'lumotlar yangilandi"],
         weaknesses: ["Kichik kamchiliklar tahlil qilinmoqda"],
@@ -756,8 +756,13 @@ export function Cases({ user }: { user?: any }) {
         console.warn("AI didn't output ideal JSON, using custom string adaptation");
       }
 
+      const readiness = payload.proceduralReadiness ?? payload.winningProbability ?? 50;
+
       await updateDoc(doc(db, "cases", activeCaseId), {
-        winningProbability: payload.winningProbability || 50,
+        proceduralReadiness: readiness,
+        winningProbability: readiness,
+        evidenceStrength: payload.evidenceStrength || "O'rta",
+        missingInformation: Array.isArray(payload.missingInformation) ? payload.missingInformation : [],
         riskLevel: payload.riskLevel || "Medium",
         strengths: payload.strengths || [],
         weaknesses: payload.weaknesses || [],
@@ -869,7 +874,8 @@ export function Cases({ user }: { user?: any }) {
       }
       
       summaryText += `Diagnostika Hisobi:\n`;
-      summaryText += `  - G'alaba qozonish ehtimoli: ${activeCase.winningProbability || 50}%\n`;
+      summaryText += `  - Jarayonga tayyorgarlik darajasi: ${activeCase.proceduralReadiness || activeCase.winningProbability || 50}%\n`;
+      summaryText += `  - Dalillar holati: ${activeCase.evidenceStrength || "O'rta"}\n`;
       summaryText += `  - Xavf-xatarlar darajasi: ${activeCase.riskLevel || "Medium"}\n\n`;
       
       summaryText += `--------------------------------------------------\n`;
@@ -1301,12 +1307,12 @@ export function Cases({ user }: { user?: any }) {
                     {/* Visual dashboard summary components */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       
-                      {/* Probability card with radial meter */}
+                      {/* Procedural readiness card with radial meter */}
                       <div className="bg-white dark:bg-zinc-900 rounded-3xl p-6 border border-gray-200/80 dark:border-zinc-800 shadow-sm flex flex-col items-center justify-center text-center relative overflow-hidden">
                         
                         <div className="absolute top-4 left-4 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 px-3 py-1 rounded-xl text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
                           <TrendingUp className="w-3.5 h-3.5" />
-                          G'alaba ehtimolligi
+                          Jarayonga tayyorgarlik
                         </div>
 
                         {/* Circular ring meter */}
@@ -1329,18 +1335,18 @@ export function Cases({ user }: { user?: any }) {
                               strokeWidth="10"
                               fill="transparent"
                               strokeDasharray={376.8}
-                              strokeDashoffset={376.8 - (376.8 * (activeCase.winningProbability || 50)) / 100}
+                              strokeDashoffset={376.8 - (376.8 * (activeCase.proceduralReadiness || activeCase.winningProbability || 50)) / 100}
                               className="transition-all duration-1000 ease-out"
                             />
                           </svg>
                           <div className="absolute inset-0 flex flex-col items-center justify-center">
-                            <span className="text-3xl font-black text-blue-600 dark:text-blue-400">{activeCase.winningProbability || 50}%</span>
-                            <span className="text-[10px] text-gray-400 dark:text-zinc-500 font-semibold mt-0.5">Sud bahosi</span>
+                            <span className="text-3xl font-black text-blue-600 dark:text-blue-400">{activeCase.proceduralReadiness || activeCase.winningProbability || 50}%</span>
+                            <span className="text-[10px] text-gray-400 dark:text-zinc-500 font-semibold mt-0.5">Tayyorgarlik</span>
                           </div>
                         </div>
 
                         <p className="text-[11px] text-gray-400 dark:text-zinc-400 mt-4 leading-relaxed max-w-xs">
-                          Ushbu ko'rsatkich barcha taqdim qilingan dalillar, yozilgan qarorlar va chat tarixiga asosan baholanadi.
+                          Ushbu ko'rsatkich barcha taqdim qilingan dalillar, protsessual talablar va ma'lumotlarning to'liqligiga asosan baholanadi.
                         </p>
                       </div>
 
@@ -1443,6 +1449,27 @@ export function Cases({ user }: { user?: any }) {
                         </ul>
                       </div>
                     </div>
+
+                    {/* Missing Information Block */}
+                    {activeCase.missingInformation && activeCase.missingInformation.length > 0 && (
+                      <div className="bg-amber-50/50 dark:bg-amber-950/20 rounded-3xl p-6 border border-amber-200/80 dark:border-amber-900/40 shadow-sm">
+                        <h4 className="text-sm font-bold text-amber-900 dark:text-amber-300 flex items-center gap-2 mb-2">
+                          <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                          Yetishmayotgan ma'lumotlar va dalillar (Missing Information)
+                        </h4>
+                        <p className="text-xs text-amber-800/80 dark:text-amber-400/80 mb-3">
+                          Protsessual talablarga muvofiq to'liq himoya yoki da'vo shakllantirish uchun quyidagi ma'lumotlar taqdim etilishi tavsiya etiladi:
+                        </p>
+                        <ul className="space-y-2">
+                          {activeCase.missingInformation.map((item, idx) => (
+                            <li key={idx} className="flex gap-2.5 items-start text-xs text-amber-950 dark:text-amber-200">
+                              <span className="bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300 px-1.5 py-0.5 rounded font-bold text-[10px]">?</span>
+                              <span className="font-medium leading-relaxed">{item}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
 
                     {/* Strategy & AI Expert Critique Section */}
                     <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-gray-200 dark:border-zinc-800 shadow-sm p-6 space-y-6">

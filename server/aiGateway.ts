@@ -397,45 +397,142 @@ export function getTashkentDateString(): string {
   }
 }
 
-/**
- * Resolves Gemini model according to operation complexity and server environment variables.
- */
-export function resolveModel(operation: AIOperation, requestedModel?: string): string {
-  const fastModel = process.env.GEMINI_FAST_MODEL?.trim() || "gemini-3.8-flash";
-  const strongModel = process.env.GEMINI_STRONG_MODEL?.trim() || "gemini-3.1-pro-preview";
+interface DiscoveredModelsCache {
+  models: string[];
+  lastDiscoveredAt: number;
+}
+let discoveredModelsCache: DiscoveredModelsCache | null = null;
+const MODEL_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour TTL
 
-  if (requestedModel && (requestedModel.includes("pro") || requestedModel.includes("strong"))) {
-    return strongModel;
+/**
+ * Dynamically queries available models using GoogleGenAI SDK with 1-hour in-memory cache.
+ * Gracefully returns empty array on errors so fallback chain operates safely.
+ */
+export async function discoverAvailableModels(apiKey: string): Promise<string[]> {
+  const now = Date.now();
+  if (discoveredModelsCache && (now - discoveredModelsCache.lastDiscoveredAt) < MODEL_CACHE_TTL_MS) {
+    return discoveredModelsCache.models;
   }
 
-  switch (operation) {
-    case "reasoning":
-    case "document":
-    case "deep_analysis":
-      return strongModel;
-    case "file_analysis":
-    case "chat":
-    default:
-      return fastModel;
+  if (!apiKey || apiKey === "MY_GEMINI_API_KEY" || apiKey === "your_real_key_here") {
+    return [];
+  }
+
+  try {
+    const ai = new GoogleGenAI({ apiKey });
+    const response = await ai.models.list();
+    const modelNames: string[] = [];
+    for await (const m of response) {
+      const name = m.name ? m.name.replace(/^models\//, "") : "";
+      if (name) {
+        modelNames.push(name);
+      }
+    }
+    if (modelNames.length > 0) {
+      discoveredModelsCache = {
+        models: modelNames,
+        lastDiscoveredAt: now
+      };
+      console.log(`[AI Model Discovery] Discovered ${modelNames.length} available Gemini models for API key.`);
+      return modelNames;
+    }
+  } catch (err: any) {
+    console.warn(`[AI Model Discovery] Dynamic query notice (${err.message || err}). Using standard resilient models.`);
+  }
+
+  return [];
+}
+
+/**
+ * Resolves Gemini model according to operation complexity, server environment variables,
+ * and dynamically discovered models.
+ * Uses official, verified @google/genai SDK model identifiers.
+ */
+export function resolveModel(
+  operation: AIOperation, 
+  requestedModel?: string,
+  availableModels: string[] = []
+): string {
+  const defaultFast = "gemini-2.5-flash";
+  const defaultStrong = "gemini-2.5-pro";
+
+  const envFast = process.env.GEMINI_FAST_MODEL?.trim();
+  const envStrong = process.env.GEMINI_STRONG_MODEL?.trim();
+
+  // If specific model requested and available
+  if (requestedModel) {
+    const cleanRequested = requestedModel.replace(/^models\//, "").trim();
+    if (availableModels.length === 0 || availableModels.includes(cleanRequested)) {
+      return cleanRequested;
+    }
+  }
+
+  const isStrongOp = operation === "reasoning" || operation === "document" || operation === "deep_analysis";
+
+  if (isStrongOp) {
+    if (envStrong && (availableModels.length === 0 || availableModels.includes(envStrong))) {
+      return envStrong;
+    }
+    const strongCandidates = [
+      "gemini-2.5-pro",
+      "gemini-3.1-pro-preview",
+      "gemini-2.5-flash",
+      "gemini-flash-latest"
+    ];
+    for (const candidate of strongCandidates) {
+      if (availableModels.length === 0 || availableModels.includes(candidate)) {
+        return candidate;
+      }
+    }
+    return defaultStrong;
+  } else {
+    if (envFast && (availableModels.length === 0 || availableModels.includes(envFast))) {
+      return envFast;
+    }
+    const fastCandidates = [
+      "gemini-2.5-flash",
+      "gemini-flash-latest",
+      "gemini-3.1-flash-lite",
+      "gemini-2.5-pro"
+    ];
+    for (const candidate of fastCandidates) {
+      if (availableModels.length === 0 || availableModels.includes(candidate)) {
+        return candidate;
+      }
+    }
+    return defaultFast;
   }
 }
 
 /**
- * Returns an ordered fallback chain of valid alternative models if the primary model is unavailable.
- * Only genuine, supported Gemini models from the SDK catalogue are included.
+ * Returns an ordered fallback chain of verified alternative models if the primary model is unavailable.
+ * Filtered by available models if discovered, ensuring resilient fallback.
  */
-export function getFallbackModelChain(primaryModel: string, operation: AIOperation): string[] {
+export function getFallbackModelChain(
+  primaryModel: string, 
+  operation: AIOperation,
+  availableModels: string[] = []
+): string[] {
   const chain: string[] = [primaryModel];
 
-  // Tailored candidates based on operation tier
   const isStrongOp = operation === "reasoning" || operation === "document" || operation === "deep_analysis";
-  const candidates = isStrongOp
-    ? ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash"]
-    : ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-flash-latest"];
+  const preferredPool = isStrongOp
+    ? ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-flash-latest"]
+    : ["gemini-2.5-flash", "gemini-flash-latest", "gemini-3.1-flash-lite", "gemini-2.5-pro"];
 
-  for (const candidate of candidates) {
+  for (const candidate of preferredPool) {
     if (!chain.includes(candidate)) {
-      chain.push(candidate);
+      if (availableModels.length === 0 || availableModels.includes(candidate)) {
+        chain.push(candidate);
+      }
+    }
+  }
+
+  // Ensure chain contains at least 2 models
+  if (chain.length === 1) {
+    const backup = isStrongOp ? "gemini-2.5-flash" : "gemini-2.5-pro";
+    if (!chain.includes(backup)) {
+      chain.push(backup);
     }
   }
 
@@ -446,6 +543,9 @@ export function getFallbackModelChain(primaryModel: string, operation: AIOperati
  * Validates whether an error represents a genuine model availability failure.
  * Explicitly EXCLUDES rate limits (429), quota exhaustion, auth errors (401),
  * safety blocks, and malformed client payloads.
+ *
+ * CRITICAL: Do NOT classify generic strings like "models/" as model unavailable,
+ * as Gemini standard URLs include "models/". Only match 404 or explicit model-not-found / unsupported errors.
  */
 export function isModelUnavailableError(error: any): boolean {
   if (!error) return false;
@@ -481,16 +581,16 @@ export function isModelUnavailableError(error: any): boolean {
   }
 
   // Genuine model availability / not found / unsupported patterns:
+  // Must be 404 or explicitly state model is not found, not supported, or unavailable
   return (
     status === 404 ||
-    errMsg.includes("not found") ||
-    errMsg.includes("is not found for api version") ||
-    errMsg.includes("models/") ||
+    errMsg.includes("not found for api version") ||
+    errMsg.includes("model not found") ||
+    errMsg.includes("is not found") ||
     (errMsg.includes("model") && (
       errMsg.includes("not supported") ||
-      errMsg.includes("unavailable") ||
-      errMsg.includes("unsupported") ||
-      errMsg.includes("not found")
+      errMsg.includes("is unavailable") ||
+      errMsg.includes("unsupported model")
     ))
   );
 }

@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { db, auth } from "../firebase";
-import { onAuthStateChanged } from "firebase/auth";
+import { db } from "../firebase";
 import { collection, query, where, onSnapshot, getDocs } from "firebase/firestore";
 import { handleFirestoreError, OperationType } from "../lib/firestore-error";
 import { 
@@ -11,6 +10,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { getDocumentCategory, getCategoryTheme } from "./Documents";
 import { useLanguage } from "../contexts/LanguageContext";
+import { useAuth } from "../contexts/AuthContext";
 
 interface SearchResult {
   id: string;
@@ -232,6 +232,9 @@ const LOCAL_TRANSLATIONS = {
 export function SearchPage({ user }: { user?: any }) {
   const { language } = useLanguage();
   const lt = LOCAL_TRANSLATIONS[language] || LOCAL_TRANSLATIONS.uz_lat;
+  const authContext = useAuth();
+  const activeUid = user?.uid || authContext.uid || auth.currentUser?.uid || null;
+  const authReady = authContext.authReady || Boolean(activeUid);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"all" | "cases" | "documents" | "chats" | "intelligence">("all");
@@ -239,30 +242,20 @@ export function SearchPage({ user }: { user?: any }) {
   const [cases, setCases] = useState<any[]>([]);
   const [documents, setDocuments] = useState<any[]>([]);
   const [chats, setChats] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [authReady, setAuthReady] = useState(Boolean(user?.uid || auth.currentUser?.uid));
-  const [activeUid, setActiveUid] = useState<string | null>(user?.uid || auth.currentUser?.uid || null);
+  const [loading, setLoading] = useState(Boolean(activeUid));
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
 
-  // Sync auth state explicitly
   useEffect(() => {
-    if (user?.uid) {
-      setActiveUid(user.uid);
-      setAuthReady(true);
+    if (!authReady) {
+      const timer = setTimeout(() => setLoading(false), 2000);
+      return () => clearTimeout(timer);
     }
-    const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
-      const resolvedUid = fbUser?.uid || user?.uid || null;
-      setActiveUid(resolvedUid);
-      setAuthReady(true);
-    });
-    return () => unsubAuth();
-  }, [user]);
-
-  useEffect(() => {
-    if (!authReady) return;
 
     if (!activeUid) {
+      setDocuments([]);
+      setCases([]);
+      setChats([]);
       setLoading(false);
       return;
     }

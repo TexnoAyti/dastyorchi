@@ -13,6 +13,7 @@ import {
   AI_CREDIT_COSTS,
   DEFAULT_TIER_LIMITS,
   getTashkentDateString,
+  discoverAvailableModels,
   resolveModel,
   getFallbackModelChain,
   isModelUnavailableError,
@@ -570,6 +571,70 @@ export async function authenticateRequestDetails(req: express.Request): Promise<
 async function authenticateRequestUser(req: express.Request): Promise<string | null> {
   const diagnosis = await authenticateRequestDetails(req);
   return diagnosis.userId;
+}
+
+/**
+ * Authoritative check if user has admin privileges.
+ * Validates against environment ADMIN_TELEGRAM_IDS, JWT claims, and Firestore.
+ */
+export async function isUserAdmin(userId: string, req?: express.Request): Promise<boolean> {
+  if (!userId) return false;
+
+  const adminIds = (process.env.ADMIN_TELEGRAM_IDS || "")
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  let telegramIdStr = "";
+  if (userId.startsWith("tg_")) {
+    telegramIdStr = userId.replace("tg_", "");
+  }
+  if (telegramIdStr && adminIds.includes(telegramIdStr)) {
+    return true;
+  }
+
+  if (req) {
+    const rawAuth = (req.headers.authorization || req.headers.Authorization || "") as string;
+    const token = rawAuth.replace(/^Bearer\s+/i, "").trim();
+    if (token) {
+      const sessionResult = verifySessionToken(token);
+      if (sessionResult.valid && sessionResult.payload?.role === "admin") {
+        return true;
+      }
+      if (sessionResult.valid && sessionResult.payload?.telegramId && adminIds.includes(String(sessionResult.payload.telegramId))) {
+        return true;
+      }
+      if (admin.apps.length > 0 && firebaseAdminState.credentialMode === "service_account_cert") {
+        try {
+          const decoded = await admin.auth().verifyIdToken(token);
+          if (decoded?.role === "admin" || decoded?.admin === true) {
+            return true;
+          }
+          if (decoded?.email && (decoded.email === "arslonovazamat11@gmail.com" || decoded.email === "admin@dastyorchi.uz")) {
+            return true;
+          }
+        } catch {}
+      }
+    }
+  }
+
+  if (dbAdmin) {
+    try {
+      const snap = await dbAdmin.collection("users").doc(userId).get();
+      if (snap.exists) {
+        const data = snap.data();
+        if (data?.role === "admin") return true;
+        if (data?.telegramId && adminIds.includes(String(data.telegramId))) return true;
+        if (data?.email && (data.email === "arslonovazamat11@gmail.com" || data.email === "admin@dastyorchi.uz")) return true;
+      }
+    } catch (err) {
+      console.error("[AdminCheck] Firestore check error:", err);
+    }
+  } else if (!isProductionEnvironment()) {
+    return true;
+  }
+
+  return false;
 }
 
 // ==========================================
@@ -1136,21 +1201,7 @@ apiRouter.get("/ai/credits", async (req, res) => {
 apiRouter.get("/admin/ai-analytics", async (req, res) => {
   try {
     const userId = await authenticateRequestUser(req);
-    if (!userId) {
-      return res.status(401).json({ error: "Ruxsat etilmagan", code: "UNAUTHORIZED" });
-    }
-
-    let isAdmin = false;
-    if (dbAdmin) {
-      const userDoc = await dbAdmin.collection("users").doc(userId).get();
-      if (userDoc.exists && userDoc.data()?.role === "admin") {
-        isAdmin = true;
-      }
-    } else {
-      isAdmin = true; // Dev fallback
-    }
-
-    if (!isAdmin) {
+    if (!userId || !(await isUserAdmin(userId, req))) {
       return res.status(403).json({ error: "Faqat administratorlar uchun", code: "FORBIDDEN" });
     }
 
@@ -1158,6 +1209,180 @@ apiRouter.get("/admin/ai-analytics", async (req, res) => {
     return res.json(analytics);
   } catch (err: any) {
     return res.status(500).json({ error: "Analitika xatoligi: " + err.message });
+  }
+});
+
+// ------------------------------------------
+// POST /admin/subscription
+// ------------------------------------------
+apiRouter.post("/admin/subscription", async (req, res) => {
+  try {
+    const adminUserId = await authenticateRequestUser(req);
+    if (!adminUserId || !(await isUserAdmin(adminUserId, req))) {
+      return res.status(403).json({ error: "Faqat administratorlar uchun", code: "FORBIDDEN" });
+    }
+
+    const { targetUserId, subscriptionTier, subscriptionStatus } = req.body || {};
+    if (!targetUserId || !subscriptionTier) {
+      return res.status(400).json({ error: "targetUserId va subscriptionTier talab qilinadi" });
+    }
+
+    const validTiers = ["free", "pro", "business"];
+    if (!validTiers.includes(subscriptionTier)) {
+      return res.status(400).json({ error: "Noto'g'ri subscriptionTier" });
+    }
+
+    const newLimit = DEFAULT_TIER_LIMITS[subscriptionTier as keyof typeof DEFAULT_TIER_LIMITS] || 10;
+    const nowIso = new Date().toISOString();
+
+    if (dbAdmin) {
+      const userRef = dbAdmin.collection("users").doc(targetUserId);
+      const snap = await userRef.get();
+      if (!snap.exists) {
+        return res.status(404).json({ error: "Foydalanuvchi topilmadi" });
+      }
+
+      await userRef.update({
+        subscriptionTier,
+        subscriptionStatus: subscriptionStatus || "active",
+        aiCreditsDailyLimit: newLimit,
+        aiCreditsRemaining: newLimit,
+        aiCreditsUsedToday: 0,
+        requestsToday: 0,
+        exportsToday: 0,
+        updatedAt: nowIso
+      });
+    }
+
+    return res.json({
+      success: true,
+      targetUserId,
+      subscriptionTier,
+      subscriptionStatus: subscriptionStatus || "active",
+      dailyLimit: newLimit
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Obunani yangilashda xatolik: " + err.message });
+  }
+});
+
+// ------------------------------------------
+// POST /admin/user-action
+// ------------------------------------------
+apiRouter.post("/admin/user-action", async (req, res) => {
+  try {
+    const adminUserId = await authenticateRequestUser(req);
+    if (!adminUserId || !(await isUserAdmin(adminUserId, req))) {
+      return res.status(403).json({ error: "Faqat administratorlar uchun", code: "FORBIDDEN" });
+    }
+
+    const { targetUserId, action, updates } = req.body || {};
+    if (!targetUserId || !action) {
+      return res.status(400).json({ error: "targetUserId va action talab qilinadi" });
+    }
+
+    if (!dbAdmin) {
+      return res.status(503).json({ error: "Database admin unavailable" });
+    }
+
+    const userRef = dbAdmin.collection("users").doc(targetUserId);
+    const snap = await userRef.get();
+    if (!snap.exists) {
+      return res.status(404).json({ error: "Foydalanuvchi topilmadi" });
+    }
+
+    const nowIso = new Date().toISOString();
+
+    if (action === "block") {
+      await userRef.update({ blocked: true, updatedAt: nowIso });
+    } else if (action === "unblock") {
+      await userRef.update({ blocked: false, updatedAt: nowIso });
+    } else if (action === "reset_limits") {
+      const userData = snap.data() || {};
+      const limit = userData.aiCreditsDailyLimit || 10;
+      await userRef.update({
+        requestsToday: 0,
+        exportsToday: 0,
+        aiCreditsUsedToday: 0,
+        aiCreditsRemaining: limit,
+        updatedAt: nowIso
+      });
+    } else if (action === "update" && updates) {
+      const allowedKeys = ["role", "subscriptionTier", "subscriptionStatus", "displayName", "blocked"];
+      const filteredUpdates: Record<string, any> = {};
+      for (const key of allowedKeys) {
+        if (updates[key] !== undefined) {
+          filteredUpdates[key] = updates[key];
+        }
+      }
+      filteredUpdates.updatedAt = nowIso;
+      await userRef.update(filteredUpdates);
+    } else {
+      return res.status(400).json({ error: "Noma'lum action" });
+    }
+
+    return res.json({ success: true, targetUserId, action });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Amalni bajarishda xatolik: " + err.message });
+  }
+});
+
+// ------------------------------------------
+// POST /admin/payment-action
+// ------------------------------------------
+apiRouter.post("/admin/payment-action", async (req, res) => {
+  try {
+    const adminUserId = await authenticateRequestUser(req);
+    if (!adminUserId || !(await isUserAdmin(adminUserId, req))) {
+      return res.status(403).json({ error: "Faqat administratorlar uchun", code: "FORBIDDEN" });
+    }
+
+    const { paymentId, action } = req.body || {};
+    if (!paymentId || !action) {
+      return res.status(400).json({ error: "paymentId va action talab qilinadi" });
+    }
+
+    if (!dbAdmin) {
+      return res.status(503).json({ error: "Database admin unavailable" });
+    }
+
+    const pRef = dbAdmin.collection("paymentRequests").doc(paymentId);
+    const pSnap = await pRef.get();
+    if (!pSnap.exists) {
+      return res.status(404).json({ error: "To'lov so'rovi topilmadi" });
+    }
+
+    const payData = pSnap.data() || {};
+    const nowIso = new Date().toISOString();
+
+    if (action === "approve") {
+      const targetUid = payData.uid || payData.userId;
+      const tier: "pro" | "business" = (payData.tier === "business") ? "business" : "pro";
+      const amount = Number(payData.amount) || (tier === "business" ? 49.99 : 19.99);
+
+      if (targetUid) {
+        await upgradeUserSubscription(targetUid, tier, payData.provider || "manual", amount);
+      }
+
+      await pRef.update({
+        status: "approved",
+        approvedAt: nowIso,
+        approvedBy: adminUserId
+      });
+
+      return res.json({ success: true, status: "approved" });
+    } else if (action === "decline") {
+      await pRef.update({
+        status: "declined",
+        declinedAt: nowIso,
+        declinedBy: adminUserId
+      });
+      return res.json({ success: true, status: "declined" });
+    } else {
+      return res.status(400).json({ error: "Noma'lum action" });
+    }
+  } catch (err: any) {
+    return res.status(500).json({ error: "To'lov amalida xatolik: " + err.message });
   }
 });
 
@@ -1197,9 +1422,36 @@ apiRouter.post("/ai", async (req, res) => {
     });
   }
 
-  const { contents, systemInstruction, config, model } = req.body || {};
+  const { contents, systemInstruction, config, model, clientRequestId } = req.body || {};
+  if (!contents || (Array.isArray(contents) && contents.length === 0)) {
+    return res.status(400).json({
+      error: "So'rov matni (contents) kiritilmadi yoki noto'g'ri.",
+      code: "INVALID_CONTENTS"
+    });
+  }
+
+  // Idempotency: Return cached response if this clientRequestId was already completed for this user
+  if (clientRequestId && typeof clientRequestId === "string" && dbAdmin) {
+    try {
+      const existingReq = await dbAdmin.collection("ai_requests").doc(clientRequestId).get();
+      if (existingReq.exists) {
+        const reqData = existingReq.data() || {};
+        if (reqData.userId === userId && reqData.status === "completed" && reqData.response) {
+          console.log(`[AI Gateway] Idempotent cache hit for clientRequestId=${clientRequestId}`);
+          return res.json(reqData.response);
+        }
+      }
+    } catch (e: any) {
+      console.warn("[AI Gateway] ai_requests lookup error:", e.message);
+    }
+  }
+
+  // Dynamic model discovery with cache
+  const apiKey = process.env.GEMINI_API_KEY?.trim() || "";
+  const availableModels = apiKey ? await discoverAvailableModels(apiKey) : [];
+
   const operation: AIOperation = validateOperation(req.body?.operation);
-  const targetModel = resolveModel(operation, model);
+  const targetModel = resolveModel(operation, model, availableModels);
   const creditCost = AI_CREDIT_COSTS[operation] || 1;
 
   // Safe logging format mandated by prompt:
@@ -1341,31 +1593,30 @@ apiRouter.post("/ai", async (req, res) => {
       });
     }
 
-    // 3. Call Gemini API with fallback chain, timeout and cancellation
+    // 3. Call Gemini API with fallback chain and authoritative timeout via abortController
     console.log("[AI Gateway] provider request start");
     const genAI = new GoogleGenAI({
       apiKey,
       httpOptions: {
         headers: {
           "User-Agent": "dastyorchi-ai-gateway"
-        },
-        timeout: PROVIDER_TIMEOUT_MS
+        }
       }
     });
 
-    const modelChain = getFallbackModelChain(targetModel, operation);
+    const modelChain = getFallbackModelChain(targetModel, operation, availableModels);
     let successfulModel = targetModel;
     let result: any = null;
     let lastModelError: any = null;
 
     for (let i = 0; i < modelChain.length; i++) {
       const currentModelCandidate = modelChain[i];
-      if (isClientDisconnected || res.writableEnded) break;
+      if (isClientDisconnected || isTimedOut || res.writableEnded) break;
 
       try {
         console.log(`[AI Gateway] Attempting model: ${currentModelCandidate} (try ${i + 1}/${modelChain.length})`);
         
-        const generatePromise = genAI.models.generateContent({
+        result = await genAI.models.generateContent({
           model: currentModelCandidate,
           contents,
           config: {
@@ -1376,18 +1627,6 @@ apiRouter.post("/ai", async (req, res) => {
           } as any
         });
 
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          const t = setTimeout(() => {
-            isTimedOut = true;
-            console.log("[AI Gateway] provider timeout");
-            const err = new Error("PROVIDER_TIMEOUT");
-            (err as any).code = "PROVIDER_TIMEOUT";
-            reject(err);
-          }, PROVIDER_TIMEOUT_MS);
-          generatePromise.finally(() => clearTimeout(t));
-        });
-
-        result = await Promise.race([generatePromise, timeoutPromise]);
         successfulModel = currentModelCandidate;
         lastModelError = null;
         break; // Success, exit fallback chain
@@ -1395,7 +1634,7 @@ apiRouter.post("/ai", async (req, res) => {
         lastModelError = candidateErr;
         const isModelUnavail = isModelUnavailableError(candidateErr);
 
-        if (isModelUnavail && i < modelChain.length - 1) {
+        if (isModelUnavail && i < modelChain.length - 1 && !isClientDisconnected && !isTimedOut) {
           console.log("[AI Model] primary unavailable, attempting fallback");
           console.warn(`[AI Gateway] Model candidate '${currentModelCandidate}' unavailable. Advancing to fallback model...`);
           continue;
@@ -1445,16 +1684,33 @@ apiRouter.post("/ai", async (req, res) => {
     });
     creditsFinalized = true;
 
+    const responsePayload = {
+      text,
+      creditsRemaining: reservation.creditsRemaining,
+      creditsDailyLimit: reservation.creditsDailyLimit,
+      creditsUsedToday: reservation.creditsUsedToday,
+      creditCost,
+      requestId: reservation.requestId,
+      model: successfulModel
+    };
+
+    if (clientRequestId && typeof clientRequestId === "string" && dbAdmin) {
+      try {
+        await dbAdmin.collection("ai_requests").doc(clientRequestId).set({
+          clientRequestId,
+          userId,
+          operation,
+          status: "completed",
+          response: responsePayload,
+          createdAt: new Date().toISOString()
+        }, { merge: true });
+      } catch (cacheErr: any) {
+        console.warn("[AI Gateway] Error caching ai_requests:", cacheErr.message);
+      }
+    }
+
     if (!res.writableEnded) {
-      return res.json({
-        text,
-        creditsRemaining: reservation.creditsRemaining,
-        creditsDailyLimit: reservation.creditsDailyLimit,
-        creditsUsedToday: reservation.creditsUsedToday,
-        creditCost,
-        requestId: reservation.requestId,
-        model: successfulModel
-      });
+      return res.json(responsePayload);
     }
   } catch (error: any) {
     if (timeoutTimer) {
@@ -1622,16 +1878,141 @@ apiRouter.post("/ai", async (req, res) => {
 });
 
 // ------------------------------------------
+// POST /export/check-and-consume
+// ------------------------------------------
+apiRouter.post("/export/check-and-consume", async (req, res) => {
+  try {
+    const authInspection = await authenticateRequestDetails(req);
+    const userId = authInspection.userId;
+    if (!userId) {
+      const isExpired = authInspection.sessionFailReason === "expired";
+      return res.status(401).json({
+        error: isExpired ? "Session expired" : "Authentication required",
+        code: isExpired ? "SESSION_EXPIRED" : "AUTH_REQUIRED"
+      });
+    }
+
+    const todayStr = getTashkentDateString();
+
+    if (!dbAdmin) {
+      return res.json({ allowed: true, exportsToday: 1, limit: 3, remaining: 2 });
+    }
+
+    const userRef = dbAdmin.collection("users").doc(userId);
+    const snap = await userRef.get();
+
+    if (!snap.exists) {
+      return res.json({ allowed: true, exportsToday: 1, limit: 3, remaining: 2 });
+    }
+
+    const userData = snap.data() || {};
+    const tier = (userData.subscriptionTier === "pro" || userData.subscriptionTier === "business")
+      ? userData.subscriptionTier
+      : "free";
+
+    // Pro and business have unlimited exports
+    if (tier === "pro" || tier === "business") {
+      return res.json({ allowed: true, tier, unlimited: true, exportsToday: userData.exportsToday || 0 });
+    }
+
+    // Free tier: 3 exports per day
+    let exportsToday = Number(userData.exportsToday) || 0;
+    const lastReset = userData.lastExportResetDate || "";
+
+    if (lastReset !== todayStr) {
+      exportsToday = 0;
+    }
+
+    const FREE_LIMIT = 3;
+
+    if (exportsToday >= FREE_LIMIT) {
+      return res.status(429).json({
+        allowed: false,
+        error: "Bugungi bepul eksport limitingiz (3 ta) tugadi. Cheksiz eksport qilish uchun Pro tarifiga o'ting.",
+        code: "EXPORT_LIMIT_REACHED",
+        exportsToday,
+        limit: FREE_LIMIT,
+        remaining: 0
+      });
+    }
+
+    const newExports = exportsToday + 1;
+    await userRef.update({
+      exportsToday: newExports,
+      lastExportResetDate: todayStr,
+      updatedAt: new Date().toISOString()
+    });
+
+    return res.json({
+      allowed: true,
+      exportsToday: newExports,
+      limit: FREE_LIMIT,
+      remaining: Math.max(0, FREE_LIMIT - newExports)
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Eksportni tekshirishda xatolik: " + err.message });
+  }
+});
+
+// ------------------------------------------
 // POST /export/docx
 // ------------------------------------------
 apiRouter.post("/export/docx", async (req, res) => {
   try {
+    const authUserId = await authenticateRequestUser(req);
+    if (!authUserId) {
+      return res.status(401).json({ error: "Avtorizatsiyadan o'tilmagan (Authentication required)", code: "UNAUTHORIZED" });
+    }
+
     const { html } = req.body;
-    if (!html) {
+    if (!html || typeof html !== "string") {
       return res.status(400).json({ error: "HTML content is required" });
     }
 
-    const fileBuffer = await HTMLtoDOCX(html, null, {
+    // Limit HTML length to 500KB to prevent memory exhaustion and buffer overflows
+    if (html.length > 500 * 1024) {
+      return res.status(400).json({ error: "Hujjat hajmi juda katta (maksimum 500KB ruxsat etilgan)" });
+    }
+
+    // Check & atomic increment export quota
+    if (dbAdmin) {
+      const userRef = dbAdmin.collection("users").doc(authUserId);
+      const userSnap = await userRef.get();
+      const userData = userSnap.data() || {};
+      const tier = (userData.subscriptionTier as "free" | "pro" | "business") || "free";
+      const maxExports = tier === "business" ? 100 : tier === "pro" ? 15 : 1;
+
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const lastExportDate = userData.lastExportResetDate || "";
+      const exportsToday = (lastExportDate === todayStr) ? (userData.exportsToday || 0) : 0;
+
+      if (exportsToday >= maxExports) {
+        return res.status(403).json({
+          error: `Kunlik hujjat yuklab olish limiti (${maxExports}) tugadi. Tarifingizni oshiring.`,
+          code: "QUOTA_EXCEEDED",
+          tier,
+          maxExports,
+          exportsToday
+        });
+      }
+
+      await userRef.set({
+        exportsToday: exportsToday + 1,
+        lastExportResetDate: todayStr,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+    }
+
+    // Server-side HTML sanitization: Strip scripts, iframes, objects, embeds, and event handlers
+    const cleanHtml = html
+      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+      .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, "")
+      .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, "")
+      .replace(/<embed\b[^<]*(?:(?!<\/embed>)<[^<]*)*<\/embed>/gi, "")
+      .replace(/on\w+="[^"]*"/gi, "")
+      .replace(/on\w+='[^']*'/gi, "");
+
+    const fileBuffer = await HTMLtoDOCX(cleanHtml, null, {
       table: { row: { cantSplit: true } },
       footer: true,
       pageNumber: true,
@@ -1640,9 +2021,9 @@ apiRouter.post("/export/docx", async (req, res) => {
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     res.setHeader("Content-Disposition", "attachment; filename=\"document.docx\"");
     return res.send(fileBuffer);
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error generating DOCX:", error);
-    return res.status(500).json({ error: "Failed to generate DOCX" });
+    return res.status(500).json({ error: "Failed to generate DOCX: " + (error?.message || String(error)) });
   }
 });
 
@@ -1651,14 +2032,56 @@ apiRouter.post("/export/docx", async (req, res) => {
 // ------------------------------------------
 apiRouter.post("/payment/create-invoice", async (req, res) => {
   try {
-    const { userId, tier, paymentMethod, returnUrl } = req.body;
+    const authUserId = await authenticateRequestUser(req);
+    if (!authUserId) {
+      return res.status(401).json({ error: "Avtorizatsiyadan o'tilmagan (Authentication required)", code: "UNAUTHORIZED" });
+    }
 
-    if (!userId || !tier || !paymentMethod) {
-      return res.status(400).json({ error: "To'lov uchun zarur ma'lumotlar yetishmayapti: userId, tier, paymentMethod" });
+    const { tier, paymentMethod, returnUrl } = req.body;
+
+    if (!tier || !paymentMethod) {
+      return res.status(400).json({ error: "To'lov uchun zarur ma'lumotlar yetishmayapti: tier, paymentMethod" });
+    }
+
+    if (tier !== "pro" && tier !== "business") {
+      return res.status(400).json({ error: "Noto'g'ri tarif tanlangan (faqat 'pro' yoki 'business')" });
+    }
+
+    if (paymentMethod !== "payme" && paymentMethod !== "click") {
+      return res.status(400).json({ error: "Noto'g'ri to'lov tizimi (faqat 'payme' yoki 'click')" });
     }
 
     const amountUZS = tier === "pro" ? 250000 : 630000;
     const amountTiyins = amountUZS * 100;
+
+    // Validate returnUrl against allowed origins to prevent open redirect
+    let finalReturnUrl = "https://dastyorchi.uz/profile";
+    if (returnUrl && typeof returnUrl === "string") {
+      try {
+        const parsed = new URL(returnUrl, "https://dastyorchi.uz");
+        const allowedHosts = ["dastyorchi.uz", "localhost", "127.0.0.1", "web.telegram.org"];
+        if (allowedHosts.some(h => parsed.hostname === h || parsed.hostname.endsWith("." + h))) {
+          finalReturnUrl = returnUrl;
+        }
+      } catch (e) {
+        // Fallback to safe default
+      }
+    }
+
+    // Create server-authoritative pending payment order record
+    const orderId = `order_${authUserId}_${Date.now()}`;
+    if (dbAdmin) {
+      await dbAdmin.collection("payment_orders").doc(orderId).set({
+        orderId,
+        userId: authUserId,
+        tier,
+        amount: amountUZS,
+        paymentMethod,
+        status: "pending",
+        createdAt: new Date().toISOString(),
+        returnUrl: finalReturnUrl
+      });
+    }
 
     let checkoutUrl = "";
 
@@ -1667,7 +2090,7 @@ apiRouter.post("/payment/create-invoice", async (req, res) => {
       if (!PAYME_MERCHANT_ID) {
         return res.status(503).json({ error: "Payme to'lov tizimi sozlanmagan (PAYME_MERCHANT_ID yetishmaydi)." });
       }
-      const rawString = `m=${PAYME_MERCHANT_ID};ac.userId=${userId};a=${amountTiyins}`;
+      const rawString = `m=${PAYME_MERCHANT_ID};ac.orderId=${orderId};ac.userId=${authUserId};a=${amountTiyins}`;
       const base64Params = Buffer.from(rawString).toString("base64");
       checkoutUrl = `https://checkout.payme.uz/${base64Params}`;
     } else if (paymentMethod === "click") {
@@ -1676,16 +2099,11 @@ apiRouter.post("/payment/create-invoice", async (req, res) => {
       if (!CLICK_SERVICE_ID || !CLICK_MERCHANT_ID) {
         return res.status(503).json({ error: "Click to'lov tizimi sozlanmagan (CLICK_SERVICE_ID yoki CLICK_MERCHANT_ID yetishmaydi)." });
       }
-      const defaultReturnUrl = "https://dastyorchi.uz/profile";
-      const finalReturnUrl = returnUrl || defaultReturnUrl;
-
-      checkoutUrl = `https://my.click.uz/services/pay?service_id=${CLICK_SERVICE_ID}&merchant_id=${CLICK_MERCHANT_ID}&amount=${amountUZS}&transaction_param=${userId}&return_url=${encodeURIComponent(finalReturnUrl)}`;
-    } else {
-      return res.status(400).json({ error: "Noma'lum to'lov tizimi turi." });
+      checkoutUrl = `https://my.click.uz/services/pay?service_id=${CLICK_SERVICE_ID}&merchant_id=${CLICK_MERCHANT_ID}&amount=${amountUZS}&transaction_param=${orderId}&return_url=${encodeURIComponent(finalReturnUrl)}`;
     }
 
-    console.log(`[Payment] Invoice built for user: ${userId}, Tier: ${tier}, Method: ${paymentMethod}`);
-    return res.json({ checkoutUrl });
+    console.log(`[Payment] Authoritative invoice built for user: ${authUserId}, Tier: ${tier}, Method: ${paymentMethod}, OrderId: ${orderId}`);
+    return res.json({ checkoutUrl, orderId });
   } catch (err: any) {
     console.error("Failed to construct invoice:", err);
     return res.status(500).json({ error: err.message || "To'lov hisobini shakllantirishda xatolik yuz berdi" });
@@ -1728,13 +2146,36 @@ apiRouter.post("/payment/click-webhook", async (req, res) => {
       });
     }
 
-    const userId = merchant_trans_id;
-    if (!userId) {
-      return res.json({ error: -2, error_note: "Missing merchant transaction user identification" });
+    // Idempotency: Check if this click_trans_id has already been completed
+    if (dbAdmin && click_trans_id) {
+      const existingTxn = await dbAdmin.collection("clickTransactions").doc(String(click_trans_id)).get();
+      if (existingTxn.exists && existingTxn.data()?.status === "completed") {
+        return res.json({
+          click_trans_id,
+          merchant_trans_id,
+          merchant_confirm_id: `conf_${click_trans_id}`,
+          error: 0,
+          error_note: "Already processed"
+        });
+      }
     }
 
-    if (dbAdmin) {
-      const userSnap = await dbAdmin.collection("users").doc(userId).get();
+    // Resolve userId and tier: merchant_trans_id could be an orderId or direct userId
+    let resolvedUserId = merchant_trans_id;
+    let resolvedTier: "pro" | "business" = Number(amount) >= 600000 ? "business" : "pro";
+
+    if (dbAdmin && merchant_trans_id) {
+      // Check if merchant_trans_id is an order in payment_orders
+      const orderDoc = await dbAdmin.collection("payment_orders").doc(merchant_trans_id).get();
+      if (orderDoc.exists) {
+        const orderData = orderDoc.data() || {};
+        resolvedUserId = orderData.userId || resolvedUserId;
+        if (orderData.tier === "business" || orderData.tier === "pro") {
+          resolvedTier = orderData.tier;
+        }
+      }
+
+      const userSnap = await dbAdmin.collection("users").doc(resolvedUserId).get();
       if (!userSnap.exists) {
         return res.json({ error: -5, error_note: "Foydalanuvchi hisobi topilmadi (User not found)" });
       }
@@ -1757,9 +2198,30 @@ apiRouter.post("/payment/click-webhook", async (req, res) => {
       }
 
       const paymentAmount = Number(amount);
-      const tier: "pro" | "business" = paymentAmount >= 600000 ? "business" : "pro";
 
-      await upgradeUserSubscription(userId, tier, "click", paymentAmount);
+      await upgradeUserSubscription(resolvedUserId, resolvedTier, "click", paymentAmount);
+
+      // Record transaction idempotently in clickTransactions
+      if (dbAdmin && click_trans_id) {
+        await dbAdmin.collection("clickTransactions").doc(String(click_trans_id)).set({
+          click_trans_id,
+          merchant_trans_id,
+          userId: resolvedUserId,
+          amount: paymentAmount,
+          tier: resolvedTier,
+          status: "completed",
+          completedAt: new Date().toISOString()
+        }, { merge: true });
+
+        // Also update order status if orderId was used
+        if (merchant_trans_id.startsWith("order_")) {
+          await dbAdmin.collection("payment_orders").doc(merchant_trans_id).set({
+            status: "completed",
+            click_trans_id,
+            completedAt: new Date().toISOString()
+          }, { merge: true });
+        }
+      }
 
       return res.json({
         click_trans_id,

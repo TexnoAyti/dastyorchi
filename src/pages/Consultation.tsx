@@ -60,7 +60,7 @@ const LOCAL_TRANSLATIONS: Record<string, Record<string, string>> = {
     saving: "Saqlanmoqda...",
     save: "Saqlash",
     cancel: "Bekor qilish",
-    win_prob: "Yutish foizi",
+    win_prob: "Tayyorgarlik darajasi",
     risk_level: "Xavf darajasi",
     strengths: "Kuchli taraflar",
     weaknesses: "Zaif taraflar",
@@ -148,7 +148,7 @@ const LOCAL_TRANSLATIONS: Record<string, Record<string, string>> = {
     saving: "Сақланмоқда...",
     save: "Сақлаш",
     cancel: "Бекор қилиш",
-    win_prob: "Ютиш фоизи",
+    win_prob: "Тайёргарлик даражаси",
     risk_level: "Хавф даражаси",
     strengths: "Кучли тарафлар",
     weaknesses: "Заиф тарафлар",
@@ -236,7 +236,7 @@ const LOCAL_TRANSLATIONS: Record<string, Record<string, string>> = {
     saving: "Сохранение...",
     save: "Сохранить",
     cancel: "Отмена",
-    win_prob: "Шанс выигрыша",
+    win_prob: "Процессуальная готовность",
     risk_level: "Уровень риска",
     strengths: "Сильные стороны",
     weaknesses: "Слабые стороны",
@@ -513,7 +513,7 @@ export function Consultation({ user }: { user: any }) {
       if (analysis.winningProbability !== undefined && analysis.winningProbability > 0) {
         htmlString += `
           <div style="margin-top: 20px; padding: 15px; background: #f0fdf4; border-radius: 8px;">
-            <h2 style="color: #166534; font-size: 18px; margin-bottom: 5px;">Yutish Foizi</h2>
+            <h2 style="color: #166534; font-size: 18px; margin-bottom: 5px;">Jarayonga Tayyorgarlik Darajasi</h2>
             <p style="font-size: 24px; font-weight: bold; color: #15803d; margin: 0;">${analysis.winningProbability}%</p>
           </div>
         `;

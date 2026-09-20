@@ -5,10 +5,11 @@ import { pipelineTracker } from "../utils/pipelineTracker";
 import { auth } from "../firebase";
 import { getApiAuthorizationHeader, silentTelegramReauth } from "./apiAuth";
 import { safeBase64ToStringAsync } from "../utils/fileEncoding";
+import DOMPurify from "dompurify";
 
 const SYSTEM_INSTRUCTION = `You are an elite legal AI assistant for Uzbekistan.
 
-Your goal is NOT just to answer questions. Your goal is to solve the user's legal problem completely.
+Your goal is NOT just to answer questions. Your goal is to solve the user's legal problem completely and accurately under the legislation of the Republic of Uzbekistan.
 
 ----------------------------------
 CORE SYSTEM
@@ -20,9 +21,19 @@ CORE SYSTEM
 
 ----------------------------------
 SMART AUTO-FILL & DOCUMENTS
-- If user provides minimal input, detect legal category, choose correct document type, and auto-fill ALL missing fields.
-- NO MANUAL FIELD FILLING REQUIRED. Do NOT use placeholders like [Name] or [Date]. Generate realistic data if needed to complete the document.
-- Generate full professional legal documents.
+- If user provides minimal input, detect legal category and choose correct document type.
+- Never invent factual case data (such as specific contract numbers, fake amounts, fake court cases, or fictional article numbers). For missing factual data, use clear standard placeholders (e.g. ______) and explicitly list them under 'missingInformation' so the user knows what to provide.
+- Generate full professional legal documents according to Uzbek judicial standards.
+
+----------------------------------
+LEGAL INTEGRITY & UZBEK JURISDICTION ACCURACY (CRITICAL)
+- Dastyorchi must NEVER invent:
+  * fictitious article numbers
+  * fake court precedents
+  * fake decision numbers
+  * made-up government resolutions
+- Never guarantee a court victory or calculate artificial winning probability percentages.
+- When factual information is missing or unclear (such as contract dates, claim amounts, registration status, jurisdiction/court level), return an explicit structured list in "missingInformation" and prompt the user to provide them.
 
 ----------------------------------
 FILE UPLOAD + AI ANALYSIS
@@ -31,13 +42,13 @@ FILE UPLOAD + AI ANALYSIS
 
 ----------------------------------
 LEGAL ARTICLE INTEGRATION
-- You MUST reference real laws.
-- Show article numbers.
+- Reference only verified, real laws of the Republic of Uzbekistan.
+- Show accurate article numbers and code names (Fuqarolik kodeksi, Mehnat kodeksi, Soliq kodeksi, Jinoyat kodeksi, Iqtisodiy protsessual kodeksi, Fuqarolik protsessual kodeksi).
 - Format references clearly so they stand out.
 
 ----------------------------------
 LEGAL CALCULATOR
-- Calculate state fees, deadlines, and penalties based on official data only.
+- Calculate state fees, deadlines, and penalties based on official data only (BHM, official statutory interest rates).
 - NO GUESSING. Use official legal sources for calculations.
 
 ----------------------------------
@@ -48,9 +59,9 @@ BUSINESS MODE
 ----------------------------------
 LANGUAGE STYLE
 - Strong legal Uzbek (or requested language).
-- Clear and confident.
+- Clear, objective, and legally sound.
 - No robotic tone.
-- Act like a real lawyer who thinks ahead, guides the process, and helps the user win the case.`;
+- Act like an experienced, principled attorney who guides the client prudently through legal proceedings.`;
 
 export class AIServerError extends Error {
   status: number;
@@ -87,12 +98,14 @@ export async function callAIServer(params: {
   model?: string;
   config?: any;
   operation?: AIOperationType;
+  clientRequestId?: string;
 }, onRetry?: (msg: string) => void): Promise<string> {  
   let attempts = 0;
   const maxRetries = 2;
   const retryDelays = [2000, 5000];
   let currentModel = params.model;
   const operation = params.operation || "chat";
+  const clientRequestId = params.clientRequestId || (`req_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`);
   let hasAttemptedReauth = false;
 
   while (true) {
@@ -113,7 +126,8 @@ export async function callAIServer(params: {
           systemInstruction: params.systemInstruction,
           config: params.config,
           model: currentModel,
-          operation
+          operation,
+          clientRequestId
         }),
       });
     } catch (fetchErr: any) {
@@ -354,9 +368,7 @@ export function cleanAndValidateHTML(rawHtml: any): string {
   let html = rawHtml.trim();
   
   // 1. Strip markdown block indicators like ```html ... ``` or ```xml ... ``` or similar code fencing
-  html = html.replace(/^```html\s*/i, '').replace(/```\s*$/i, '').trim();
-  html = html.replace(/^```xml\s*/i, '').replace(/```\s*$/i, '').trim();
-  html = html.replace(/^```\s*/, '').replace(/```\s*$/, '').trim();
+  html = html.replace(/^```(?:html|xml)?\s*/i, '').replace(/```\s*$/i, '').trim();
   
   // 2. Decode double HTML-escaped tags if they are encoded in the JSON (e.g. &lt;h1&gt;)
   if (html.includes("&lt;") || html.includes("&gt;") || html.includes("&amp;lt;")) {
@@ -388,44 +400,35 @@ export function cleanAndValidateHTML(rawHtml: any): string {
   // 3. Strip raw wrapping backticks
   html = html.replace(/^`+/, "").replace(/`+$/, "").trim();
 
-  // 4. Ensure no wrapper tags like <html>, <body>, <string>, <content>, <document> show as raw text or markup.
-  if (typeof window !== "undefined" && window.DOMParser) {
-    try {
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, "text/html");
-      const body = doc.body;
-      
-      const disallowedTags = ["string", "content", "document"];
-      
-      // Remove all elements of these tags while preserving their child nodes/text
-      for (const tag of disallowedTags) {
-        const elements = Array.from(doc.getElementsByTagName(tag));
-        for (const el of elements) {
-          const parent = el.parentNode;
-          if (parent) {
-            while (el.firstChild) {
-              parent.insertBefore(el.firstChild, el);
-            }
-            parent.removeChild(el);
-          }
-        }
-      }
-      
-      let cleanResult = body.innerHTML.trim();
-      if (cleanResult) {
-        return cleanResult;
-      }
-    } catch (err) {
-      console.error("DOMParser clean failed, falling back to regex: ", err);
-    }
+  // 4. Strip root document wrappers if present
+  html = html.replace(/<\/?(html|body|string|content|document)[^>]*>/gi, "").trim();
+
+  // 5. Robust allowlist-based DOMPurify sanitization
+  try {
+    const cleanResult = DOMPurify.sanitize(html, {
+      ALLOWED_TAGS: [
+        'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+        'p', 'br', 'hr',
+        'strong', 'b', 'em', 'i', 'u', 's', 'strike', 'sub', 'sup',
+        'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
+        'ol', 'ul', 'li',
+        'blockquote', 'pre', 'code',
+        'span', 'div', 'a'
+      ],
+      ALLOWED_ATTR: ['href', 'style', 'class', 'target', 'rel', 'colspan', 'rowspan', 'align'],
+      ALLOW_DATA_ATTR: false
+    });
+    return cleanResult.trim();
+  } catch (err) {
+    console.error("DOMPurify sanitize failed, using fallback regex: ", err);
+    return html
+      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+      .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, "")
+      .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, "")
+      .replace(/<embed\b[^<]*(?:(?!<\/embed>)<[^<]*)*<\/embed>/gi, "")
+      .replace(/on\w+="[^"]*"/gi, "")
+      .trim();
   }
-  
-  // Fallback regex cleaning of wrapper tags to make absolutely sure they never display as text
-  html = html
-    .replace(/<\/?(html|body|string|content|document)[^>]*>/gi, "")
-    .trim();
-    
-  return html;
 }
 
 export function findMatchingArticles(text: string): typeof LEGAL_LIBRARY {
@@ -528,8 +531,10 @@ RESPONSE FORMAT (MANDATORY)
   "type": "chat" | "document",
   "content": "Raw chat text or clean HTML document",
   "analysis": {
-    "winningProbability": 0,
-    "riskLevel": "Low | Medium | High",
+    "proceduralReadiness": 0 to 100 integer (procedural readiness & document completeness),
+    "evidenceStrength": "Kuchli" | "O'rta" | "Yetarli emas",
+    "riskLevel": "Past" | "O'rta" | "Yuqori" | "Low" | "Medium" | "High",
+    "missingInformation": ["missing fact 1", "missing fact 2"],
     "strengths": ["...", "..."],
     "weaknesses": ["...", "..."],
     "risk": "...",
@@ -545,8 +550,10 @@ INTENT DETECTION
   "type": "chat",
   "content": "clear answer",
   "analysis": {
-    "winningProbability": 0,
-    "riskLevel": "Low",
+    "proceduralReadiness": 70,
+    "evidenceStrength": "O'rta",
+    "riskLevel": "O'rta",
+    "missingInformation": [],
     "strengths": ["..."],
     "weaknesses": ["..."],
     "risk": "possible legal risks",
@@ -561,8 +568,10 @@ INTENT DETECTION
   "type": "document",
   "content": "<h1>Taqdimnoma</h1><p>...</p>",
   "analysis": {
-    "winningProbability": 0,
-    "riskLevel": "Low",
+    "proceduralReadiness": 85,
+    "evidenceStrength": "Kuchli",
+    "riskLevel": "Past",
+    "missingInformation": [],
     "strengths": ["..."],
     "weaknesses": ["..."],
     "risk": "possible legal risks",
@@ -572,9 +581,9 @@ INTENT DETECTION
 }
 
 DOCUMENT RULES
-- Use structured HTML inside \\"content\\" directly: <h1>, <h2>, <p>, <strong>
+- Use structured HTML inside "content" directly: <h1>, <h2>, <p>, <strong>
 - NEVER wrap HTML in markdown blocks inside the content value string.
-- NEVER use placeholder tags like <string>, <content>, <html>, or <body> in the \\"content\\" field. Use standard HTML tags directly (e.g., \\"<h1>Taqdimnoma</h1>...\\").
+- NEVER use placeholder tags like <string>, <content>, <html>, or <body> in the "content" field. Use standard HTML tags directly (e.g., "<h1>Taqdimnoma</h1>...").
 - NEVER output HTML entity escape codes like &lt; or &gt; inside the XML or JSON content; use raw HTML tags directly.
 - Formal legal tone, clear sections, ready for a rich-text document editor.
 
@@ -585,11 +594,13 @@ CHAT RULES
 - No unnecessary text
 
 ANALYSIS (ALWAYS INCLUDE)
-- winningProbability: Integer between 0 and 100 estimating legal success chance
-- riskLevel: "Low", "Medium", or "High"
+- proceduralReadiness: Integer between 0 and 100 estimating procedural readiness and completeness
+- evidenceStrength: "Kuchli", "O'rta", or "Yetarli emas"
+- riskLevel: "Past", "O'rta", or "Yuqori"
+- missingInformation: list of missing factual elements under Uzbek legislation (e.g. shartnoma sanasi/turi, da'vo summasi, sud instansiyasi)
 - strengths: list of strong evidence or procedural compliance
-- weaknesses: list of missing evidence or risks
-- risk: possible legal risks
+- weaknesses: list of missing evidence or procedural risks
+- risk: objective legal risks analysis
 - strategy: recommended legal strategy
 - expertise: professional legal evaluation
 
@@ -600,6 +611,7 @@ STRICT RULES
 - NEVER return plain text
 - NEVER break JSON format
 - NEVER include explanations outside JSON
+- NEVER invent fictitious article numbers, fake precedents, or fake statistics
 
 OPTIMIZATION (IMPORTANT)
 - Combine all outputs into ONE response
@@ -612,8 +624,10 @@ If unsure -> default to:
   "type": "chat",
   "content": "...",
   "analysis": {
-    "winningProbability": 0,
-    "riskLevel": "Medium",
+    "proceduralReadiness": 50,
+    "evidenceStrength": "O'rta",
+    "riskLevel": "O'rta",
+    "missingInformation": [],
     "strengths": [],
     "weaknesses": [],
     "risk": "...",
@@ -745,8 +759,10 @@ If unsure -> default to:
         "type": "chat" | "document",
         "content": "batafsil javob matni (chat bo'lsa oddiy matn, rasmiy hujjat bo'lsa toza HTML formatida)",
         "analysis": {
-          "winningProbability": 0 dan 100 gacha butun son,
-          "riskLevel": "Low" | "Medium" | "High",
+          "proceduralReadiness": 0 dan 100 gacha butun son,
+          "evidenceStrength": "Kuchli" | "O'rta" | "Yetarli emas",
+          "riskLevel": "Past" | "O'rta" | "Yuqori",
+          "missingInformation": ["yetishmayotgan ma'lumot 1", "yetishmayotgan ma'lumot 2"],
           "strengths": ["kuchli tomon 1", "kuchli tomon 2"],
           "weaknesses": ["kamchiliklar/zaifliklar 1", "kamchiliklar/zaifliklar 2"],
           "risk": "barcha yuridik xavf-hatarlar",
@@ -782,11 +798,33 @@ If unsure -> default to:
         if (parsed.type === 'document' && parsed.content && typeof parsed.content === 'string') {
           parsed.content = cleanAndValidateHTML(parsed.content);
         }
+        if (parsed.analysis) {
+          const readiness = parsed.analysis.proceduralReadiness ?? parsed.analysis.winningProbability ?? 50;
+          parsed.analysis.proceduralReadiness = readiness;
+          parsed.analysis.winningProbability = readiness;
+          parsed.analysis.evidenceStrength = parsed.analysis.evidenceStrength || "O'rta";
+          parsed.analysis.missingInformation = Array.isArray(parsed.analysis.missingInformation) ? parsed.analysis.missingInformation : [];
+        }
         return parsed;
       } catch (e) {
         pipelineTracker.error('JSON.parse/synthesis', 'aiService.ts', 587, 'Failed to parse JSON, returning raw text as chat');
         console.warn("Failed to parse JSON, returning raw text as chat:", text);
-        return { type: "chat", content: text, analysis: { winningProbability: 0, riskLevel: "", strengths: [], weaknesses: [], risk: "", strategy: "", expertise: "" } };
+        return { 
+          type: "chat", 
+          content: text, 
+          analysis: { 
+            proceduralReadiness: 50, 
+            evidenceStrength: "O'rta", 
+            missingInformation: [], 
+            winningProbability: 50, 
+            riskLevel: "", 
+            strengths: [], 
+            weaknesses: [], 
+            risk: "", 
+            strategy: "", 
+            expertise: "" 
+          } 
+        };
       }
     } catch (error: any) {
       pipelineTracker.error('callAIServer/synthesis', 'aiService.ts', 597, error.message || String(error));
@@ -847,11 +885,33 @@ If unsure -> default to:
       if (parsed.type === 'document' && parsed.content && typeof parsed.content === 'string') {
         parsed.content = cleanAndValidateHTML(parsed.content);
       }
+      if (parsed.analysis) {
+        const readiness = parsed.analysis.proceduralReadiness ?? parsed.analysis.winningProbability ?? 50;
+        parsed.analysis.proceduralReadiness = readiness;
+        parsed.analysis.winningProbability = readiness;
+        parsed.analysis.evidenceStrength = parsed.analysis.evidenceStrength || "O'rta";
+        parsed.analysis.missingInformation = Array.isArray(parsed.analysis.missingInformation) ? parsed.analysis.missingInformation : [];
+      }
       return parsed;
     } catch (e) {
       pipelineTracker.error('JSON.parse/single', 'aiService.ts', 716, 'Failed to parse JSON, returning raw text as chat');
       console.warn("Failed to parse JSON, returning raw text as chat:", text);
-      return { type: "chat", content: text, analysis: { winningProbability: 0, riskLevel: "", strengths: [], weaknesses: [], risk: "", strategy: "", expertise: "" } };
+      return { 
+        type: "chat", 
+        content: text, 
+        analysis: { 
+          proceduralReadiness: 50, 
+          evidenceStrength: "O'rta", 
+          missingInformation: [], 
+          winningProbability: 50, 
+          riskLevel: "", 
+          strengths: [], 
+          weaknesses: [], 
+          risk: "", 
+          strategy: "", 
+          expertise: "" 
+        } 
+      };
     }
   } catch (error: any) {
     pipelineTracker.error('callAIServer/single', 'aiService.ts', 721, error.message || String(error));

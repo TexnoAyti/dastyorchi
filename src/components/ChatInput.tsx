@@ -231,9 +231,9 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
 
     try {
       for (const file of Array.from(files)) {
-        // Enforce max size limit (15MB) to protect Telegram mobile memory
-        if (file.size > 15 * 1024 * 1024) {
-          alert(`${file.name}: Fayl hajmi 15MB dan oshmasligi kerak.`);
+        // Enforce strict mobile memory budget (8MB) for Telegram WebApp stability
+        if (file.size > 8 * 1024 * 1024) {
+          alert(`${file.name}: Fayl hajmi 8MB dan oshmasligi kerak (Telegram mobil xotirasini tejash uchun).`);
           continue;
         }
 
@@ -242,8 +242,8 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
           continue;
         }
 
-        // Allow UI to breathe before processing each file
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        // Allow UI thread to breathe and render spinners
+        await new Promise((resolve) => setTimeout(resolve, 50));
 
         if (file.name.endsWith('.docx') || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
           try {

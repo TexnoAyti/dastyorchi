@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db, auth } from '../firebase';
 import { collection, addDoc, query, where, orderBy, onSnapshot, serverTimestamp, deleteDoc, doc } from 'firebase/firestore';
-import { onAuthStateChanged } from 'firebase/auth';
+import { useAuth } from '../contexts/AuthContext';
 import { callAIServer } from '../services/aiService';
 import { latinToCyrillic, cyrillicToLatin } from '../utils/scriptConverter';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -80,28 +80,20 @@ export function LanguageCenter() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [history, setHistory] = useState<ConversionHistory[]>([]);
   const [copied, setCopied] = useState(false);
-  const [currentUser, setCurrentUser] = useState<any>(auth.currentUser);
+  const authContext = useAuth();
+  const activeUid = authContext.uid || authContext.user?.uid || auth.currentUser?.uid || null;
   const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
   const [showLogs, setShowLogs] = useState(true);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Sync auth state explicitly
-  useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user);
-    });
-    return () => unsubscribeAuth();
-  }, []);
-
   // Set up Firestore Sync when auth state becomes ready
   useEffect(() => {
-    const uid = currentUser?.uid;
-    if (!uid) return;
+    if (!activeUid) return;
 
     const q = query(
       collection(db, "conversions"),
-      where("userId", "==", uid),
+      where("userId", "==", activeUid),
       orderBy("createdAt", "desc")
     );
 
@@ -119,7 +111,7 @@ export function LanguageCenter() {
       unsubscribe();
       console.log("[Firestore] listener detached: Language Center Conversions");
     };
-  }, [currentUser?.uid]);
+  }, [activeUid]);
 
   // Logging Helper
   const addDebugLog = (type: 'info' | 'success' | 'error', message: string, details?: any) => {
@@ -384,13 +376,13 @@ ${targetText}`;
   };
 
   const saveHistory = async (type: 'translation' | 'script_conversion', resultText: string) => {
-    if (!auth.currentUser) {
+    if (!activeUid) {
       addDebugLog('info', 'Foydalanuvchi hisobi aniqlanmadi, tarix saqlanmadi.');
       return;
     }
     try {
       await addDoc(collection(db, 'conversions'), {
-        userId: auth.currentUser.uid,
+        userId: activeUid,
         type,
         mode,
         sourceLanguage: sourceLang,

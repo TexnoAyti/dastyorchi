@@ -14,17 +14,37 @@ service cloud.firestore {
     function isAdmin() {
       return isSignedIn() && (
         ('role' in request.auth.token && request.auth.token.role == 'admin') ||
-        ('admin' in request.auth.token && request.auth.token.admin == true) ||
-        ('email' in request.auth.token && (
-          request.auth.token.email == 'arslonovazamat11@gmail.com' ||
-          request.auth.token.email == 'admin@dastyorchi.uz'
-        ))
+        ('admin' in request.auth.token && request.auth.token.admin == true)
       );
     }
 
     // 1. Users Profile & subcollections
     match /users/{userId} {
-      allow read, write: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isSignedIn() && (
+        isAdmin() ||
+        (
+          request.auth.uid == userId &&
+          request.resource.data.get('role', 'user') == 'user' &&
+          request.resource.data.get('subscriptionTier', 'free') == 'free' &&
+          request.resource.data.get('subscriptionStatus', 'active') == 'active' &&
+          request.resource.data.get('aiCreditsDailyLimit', 10) <= 10 &&
+          request.resource.data.get('aiCreditsRemaining', 10) <= 10 &&
+          request.resource.data.get('blocked', false) == false
+        )
+      );
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (
+          request.auth.uid == userId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'displayName', 'firstName', 'lastName', 'username',
+            'avatarUrl', 'photoUrl', 'language', 'languageCode',
+            'theme', 'preferences', 'updatedAt'
+          ])
+        )
+      );
+      allow delete: if isAdmin();
 
       match /notifications/{notificationId} {
         allow read, write: if isSignedIn() && (request.auth.uid == userId || isAdmin());
@@ -121,9 +141,32 @@ service cloud.firestore {
 
     // 9. Payment Requests
     match /paymentRequests/{requestId} {
-      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isSignedIn() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.uid == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isSignedIn() && (
+        (request.resource.data.userId == request.auth.uid || request.resource.data.uid == request.auth.uid) &&
+        request.resource.data.status == 'pending'
+      );
       allow update, delete: if isAdmin();
+    }
+
+    // 9a. Authoritative Payment Orders (Server-only write)
+    match /payment_orders/{orderId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if false; // Server-only via Express backend / Firebase Admin
+    }
+
+    // 9b. Financial Provider Transactions (Server-only write)
+    match /paymeTransactions/{txnId} {
+      allow read: if isAdmin();
+      allow write: if false; // Server-only via Express backend
+    }
+    match /clickTransactions/{txnId} {
+      allow read: if isAdmin();
+      allow write: if false; // Server-only via Express backend
     }
 
     // 10. Legal Articles Public Library (Read-only for public, admin write)
@@ -161,6 +204,12 @@ service cloud.firestore {
 
     // 15. Server-Authoritative AI Usage Ledger
     match /ai_usage/{requestId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if false; // Server-only via Firebase Admin SDK
+    }
+
+    // 15a. Server-Authoritative AI Request Idempotency Ledger
+    match /ai_requests/{clientRequestId} {
       allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow write: if false; // Server-only via Firebase Admin SDK
     }

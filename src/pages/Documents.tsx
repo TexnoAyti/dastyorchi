@@ -9,8 +9,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { DOCUMENT_TEMPLATES } from "../constants";
 import { cn } from "@/src/lib/utils";
-import { db, auth } from "../firebase";
-import { onAuthStateChanged } from "firebase/auth";
+import { db } from "../firebase";
 import {
   collection, query, where, orderBy, onSnapshot, deleteDoc, doc,
   limit, updateDoc, addDoc, getDocs
@@ -18,6 +17,7 @@ import {
 import { TemplateSelector } from "../components/TemplateSelector";
 import { handleFirestoreError, OperationType } from "../lib/firestore-error";
 import { logActivity } from "../services/activityService";
+import { useAuth } from "../contexts/AuthContext";
 
 // Category Constants
 export const LEGAL_CATEGORIES = [
@@ -134,6 +134,10 @@ export const getCategoryTheme = (category: string) => {
 
 export function DocumentsPage({ user }: { user?: any }) {
   const navigate = useNavigate();
+  const authContext = useAuth();
+  const activeUid = user?.uid || authContext.uid || auth.currentUser?.uid || null;
+  const authReady = authContext.authReady || Boolean(activeUid);
+
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("Barchasi");
   const [sortBy, setSortBy] = useState<"newest" | "oldest" | "type">("newest");
@@ -147,9 +151,7 @@ export function DocumentsPage({ user }: { user?: any }) {
   
   const [documents, setDocuments] = useState<any[]>([]);
   const [cases, setCases] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [authReady, setAuthReady] = useState(Boolean(user?.uid || auth.currentUser?.uid));
-  const [activeUid, setActiveUid] = useState<string | null>(user?.uid || auth.currentUser?.uid || null);
+  const [loading, setLoading] = useState(Boolean(activeUid));
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
 
@@ -166,29 +168,17 @@ export function DocumentsPage({ user }: { user?: any }) {
     }, 4000);
   };
 
-  // Sync auth state explicitly
-  useEffect(() => {
-    if (user?.uid) {
-      setActiveUid(user.uid);
-      setAuthReady(true);
-    }
-    const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
-      const resolvedUid = fbUser?.uid || user?.uid || null;
-      setActiveUid(resolvedUid);
-      setAuthReady(true);
-    });
-    return () => unsubAuth();
-  }, [user]);
-
   // Fetch Documents with explicit auth readiness and error safety
   useEffect(() => {
     if (!authReady) {
-      // Waiting for auth readiness
-      return;
+      // Waiting for auth readiness, but fail-safe release after 2 seconds
+      const timer = setTimeout(() => setLoading(false), 2000);
+      return () => clearTimeout(timer);
     }
 
     if (!activeUid) {
       // User is not signed in
+      setDocuments([]);
       setLoading(false);
       return;
     }
@@ -307,7 +297,7 @@ export function DocumentsPage({ user }: { user?: any }) {
       const clonedTitle = `${cleanTitle} (Nusxa)`;
 
       const newDoc = {
-        userId: auth.currentUser?.uid,
+        userId: activeUid,
         title: clonedTitle,
         category: cat,
         caseId: docItem.caseId || null,

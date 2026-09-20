@@ -1,5 +1,6 @@
 import { db } from "../firebase";
 import { doc, getDoc, setDoc, updateDoc, increment } from "firebase/firestore";
+import { getApiAuthorizationHeader } from "./apiAuth";
 
 export type SubscriptionTier = "free" | "pro" | "business";
 export type SubscriptionStatus = "active" | "expired" | "canceled";
@@ -246,25 +247,49 @@ export async function incrementUserRequests(userId: string): Promise<void> {
 }
 
 /**
- * Increment the user's document exports count.
+ * Increment the user's document exports count via server-side verification.
  */
 export async function incrementUserExports(userId: string): Promise<void> {
-  const todayStr = new Date().toLocaleDateString("en-CA");
-  const userRef = doc(db, "users", userId);
-  const userSnap = await getDoc(userRef);
-  
-  if (!userSnap.exists()) return;
-  const userData = userSnap.data();
-  
-  if (userData.lastExportResetDate !== todayStr) {
-    await updateDoc(userRef, {
-      exportsToday: 1,
-      lastExportResetDate: todayStr
+  try {
+    const headers = await getApiAuthorizationHeader();
+    const res = await fetch("/api/export/check-and-consume", {
+      method: "POST",
+      headers: {
+        ...headers,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ userId })
     });
-  } else {
-    await updateDoc(userRef, {
-      exportsToday: increment(1)
-    });
+
+    if (res.ok) {
+      console.log("[SubscriptionService] Export successfully counted on server");
+      return;
+    }
+  } catch (err) {
+    console.warn("[SubscriptionService] Server export count check warning:", err);
+  }
+
+  // Fallback if server is temporarily unreachable
+  try {
+    const todayStr = new Date().toLocaleDateString("en-CA");
+    const userRef = doc(db, "users", userId);
+    const userSnap = await getDoc(userRef);
+    
+    if (!userSnap.exists()) return;
+    const userData = userSnap.data();
+    
+    if (userData.lastExportResetDate !== todayStr) {
+      await updateDoc(userRef, {
+        exportsToday: 1,
+        lastExportResetDate: todayStr
+      });
+    } else {
+      await updateDoc(userRef, {
+        exportsToday: increment(1)
+      });
+    }
+  } catch (fallbackErr) {
+    console.warn("[SubscriptionService] Fallback export count warning:", fallbackErr);
   }
 }
 

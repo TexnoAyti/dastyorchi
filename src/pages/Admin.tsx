@@ -271,8 +271,25 @@ export function AdminPanel({ user }: { user?: any }) {
   // User Actions
   const handleUpdateUserStatus = async (userObj: any, updates: any) => {
     try {
-      const uRef = doc(db, "users", userObj.id);
-      await updateDoc(uRef, updates);
+      const headers = await getApiAuthorizationHeader();
+      const res = await fetch("/api/admin/user-action", {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          targetUserId: userObj.id,
+          action: "update",
+          updates
+        })
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Foydalanuvchini yangilash muvaffaqiyatsiz bo'ldi");
+      }
+
       alert("Foydalanuvchi ma'lumoti muvaffaqiyatli saqlandi.");
       
       // Update local state smoothly
@@ -288,35 +305,94 @@ export function AdminPanel({ user }: { user?: any }) {
   const handleBlockToggle = async (userObj: any) => {
     const isBlocking = !userObj.blocked;
     const confirmMsg = isBlocking 
-      ? `Haqiqatan ham ${userObj.email} hisobini bloklamoqchisiz?` 
-      : `${userObj.email} hisobini blokdan chiqarmoqchisiz?`;
+      ? `Haqiqatan ham ${userObj.email || userObj.displayName || userObj.id} hisobini bloklamoqchisiz?` 
+      : `${userObj.email || userObj.displayName || userObj.id} hisobini blokdan chiqarmoqchisiz?`;
 
     if (!window.confirm(confirmMsg)) return;
 
-    await handleUpdateUserStatus(userObj, { blocked: isBlocking });
+    try {
+      const headers = await getApiAuthorizationHeader();
+      const res = await fetch("/api/admin/user-action", {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          targetUserId: userObj.id,
+          action: isBlocking ? "block" : "unblock"
+        })
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Blok holatini o'zgartirish muvaffaqiyatsiz bo'ldi");
+      }
+
+      const updates = { blocked: isBlocking };
+      setUsers(prev => prev.map(u => u.id === userObj.id ? { ...u, ...updates } : u));
+      if (selectedUser && selectedUser.id === userObj.id) {
+        setSelectedUser({ ...selectedUser, ...updates });
+      }
+      alert(isBlocking ? "Foydalanuvchi bloklandi." : "Foydalanuvchi blokdan chiqarildi.");
+    } catch (e: any) {
+      alert("Blok holatini o'zgartirishda xatolik: " + e.message);
+    }
   };
 
   const handleResetLimits = async (userObj: any) => {
-    if (!window.confirm(`${userObj.email} uchun bugungi limitlarni nollamoqchisiz?`)) return;
-    await handleUpdateUserStatus(userObj, { requestsToday: 0, exportsToday: 0 });
+    if (!window.confirm(`${userObj.email || userObj.displayName || userObj.id} uchun bugungi limitlarni nollamoqchisiz?`)) return;
+    try {
+      const headers = await getApiAuthorizationHeader();
+      const res = await fetch("/api/admin/user-action", {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          targetUserId: userObj.id,
+          action: "reset_limits"
+        })
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Limitlarni nollash muvaffaqiyatsiz bo'ldi");
+      }
+
+      const updates = { requestsToday: 0, exportsToday: 0, aiCreditsUsedToday: 0 };
+      setUsers(prev => prev.map(u => u.id === userObj.id ? { ...u, ...updates } : u));
+      if (selectedUser && selectedUser.id === userObj.id) {
+        setSelectedUser({ ...selectedUser, ...updates });
+      }
+      alert("Limitlar muvaffaqiyatli nollashtirildi.");
+    } catch (e: any) {
+      alert("Limitlarni nollashda xatolik: " + e.message);
+    }
   };
 
   // Payment Actions
   const handleApprovePayment = async (payReq: any) => {
     if (!window.confirm(`Ushbu ${payReq.amount ? payReq.amount.toLocaleString() : ""}lik to'lovni tasdiqlab, faollashtirmoqchisiz?`)) return;
     try {
-      const uRef = doc(db, "users", payReq.uid);
-      await updateDoc(uRef, {
-        subscriptionTier: payReq.tier || "pro",
-        subscriptionStatus: "active",
-        requestsToday: 0
+      const headers = await getApiAuthorizationHeader();
+      const res = await fetch("/api/admin/payment-action", {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          paymentId: payReq.id,
+          action: "approve"
+        })
       });
 
-      const pRef = doc(db, "paymentRequests", payReq.id);
-      await updateDoc(pRef, {
-        status: "approved",
-        approvedAt: new Date()
-      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "To'lovni tasdiqlash muvaffaqiyatsiz bo'ldi");
+      }
 
       alert("To'lov tasdiqlandi va obuna faollashtirildi!");
       loadAllData();
@@ -328,11 +404,24 @@ export function AdminPanel({ user }: { user?: any }) {
   const handleDeclinePayment = async (payReqId: string) => {
     if (!window.confirm("Haqiqatan ham ushbu to'lov so'rovini rad etmoqchisiz?")) return;
     try {
-      const pRef = doc(db, "paymentRequests", payReqId);
-      await updateDoc(pRef, {
-        status: "declined",
-        declinedAt: new Date()
+      const headers = await getApiAuthorizationHeader();
+      const res = await fetch("/api/admin/payment-action", {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          paymentId: payReqId,
+          action: "decline"
+        })
       });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "To'lovni rad etish muvaffaqiyatsiz bo'ldi");
+      }
+
       alert("So'rov rad etildi.");
       loadAllData();
     } catch (e: any) {

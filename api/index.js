@@ -2,7 +2,7 @@
 import express from "express";
 import cors from "cors";
 import HTMLtoDOCX from "html-to-docx";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI as GoogleGenAI2 } from "@google/genai";
 import dotenv from "dotenv";
 import admin from "firebase-admin";
 import { getFirestore } from "firebase-admin/firestore";
@@ -11,6 +11,7 @@ import path from "path";
 import crypto from "crypto";
 
 // server/aiGateway.ts
+import { GoogleGenAI } from "@google/genai";
 import { FieldValue } from "firebase-admin/firestore";
 var AI_CREDIT_COSTS = {
   chat: 1,
@@ -48,16 +49,55 @@ function isProductionEnvironment() {
 var globalRequestsToday = 0;
 var globalFreeCreditsToday = 0;
 var globalResetDate = getTashkentDateString();
-var inFlightUsers = /* @__PURE__ */ new Set();
-function acquireUserLock(userId) {
-  if (inFlightUsers.has(userId)) {
+var AI_REQUEST_LOCK_TTL_MS = 12e4;
+var activeAIRequests = /* @__PURE__ */ new Map();
+function getSafeUid(uid) {
+  if (!uid || typeof uid !== "string") return "unknown";
+  const trimmed = uid.trim();
+  if (trimmed.length <= 10) return trimmed;
+  return `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`;
+}
+function getShortRequestId(id) {
+  if (!id) return "";
+  return id.length <= 12 ? id : id.slice(0, 12);
+}
+function acquireAIRequestLock(userId) {
+  if (!userId || typeof userId !== "string" || userId.trim().length === 0) {
+    return { acquired: false, reason: "INVALID_UID" };
+  }
+  const safeUid = getSafeUid(userId);
+  const existing = activeAIRequests.get(userId);
+  const now = Date.now();
+  if (existing) {
+    const ageMs = now - existing.startedAt;
+    if (ageMs < AI_REQUEST_LOCK_TTL_MS) {
+      console.log(`[AI Concurrency] concurrent request rejected uid=${safeUid}`);
+      return { acquired: false, reason: "CONCURRENT_REQUEST", ageMs };
+    }
+    console.warn(`[AI Concurrency] stale lock recovered uid=${safeUid} ageMs=${ageMs}`);
+    activeAIRequests.delete(userId);
+  }
+  const requestId = `req_${now}_${Math.random().toString(36).slice(2, 9)}`;
+  activeAIRequests.set(userId, { requestId, startedAt: now });
+  console.log(`[AI Concurrency] lock acquired uid=${safeUid} requestId=${getShortRequestId(requestId)}`);
+  return { acquired: true, requestId };
+}
+function releaseAIRequestLock(userId, requestId) {
+  if (!userId || typeof userId !== "string") {
     return false;
   }
-  inFlightUsers.add(userId);
+  const safeUid = getSafeUid(userId);
+  const existing = activeAIRequests.get(userId);
+  if (!existing) {
+    return false;
+  }
+  if (requestId && existing.requestId !== requestId) {
+    console.warn(`[AI Concurrency] lock release skipped: ownership mismatch for uid=${safeUid} (expected=${getShortRequestId(existing.requestId)}, got=${getShortRequestId(requestId)})`);
+    return false;
+  }
+  activeAIRequests.delete(userId);
+  console.log(`[AI Concurrency] lock released uid=${safeUid} requestId=${getShortRequestId(existing.requestId)}`);
   return true;
-}
-function releaseUserLock(userId) {
-  inFlightUsers.delete(userId);
 }
 var fallbackUsers = /* @__PURE__ */ new Map();
 var fallbackLedger = /* @__PURE__ */ new Map();
@@ -234,22 +274,118 @@ function getTashkentDateString() {
     return d.toISOString().split("T")[0];
   }
 }
-function resolveModel(operation, requestedModel) {
-  const fastModel = process.env.GEMINI_FAST_MODEL?.trim() || "gemini-3.8-flash";
-  const strongModel = process.env.GEMINI_STRONG_MODEL?.trim() || "gemini-3.1-pro-preview";
-  if (requestedModel && (requestedModel.includes("pro") || requestedModel.includes("strong"))) {
-    return strongModel;
+var discoveredModelsCache = null;
+var MODEL_CACHE_TTL_MS = 60 * 60 * 1e3;
+async function discoverAvailableModels(apiKey) {
+  const now = Date.now();
+  if (discoveredModelsCache && now - discoveredModelsCache.lastDiscoveredAt < MODEL_CACHE_TTL_MS) {
+    return discoveredModelsCache.models;
   }
-  switch (operation) {
-    case "reasoning":
-    case "document":
-    case "deep_analysis":
-      return strongModel;
-    case "file_analysis":
-    case "chat":
-    default:
-      return fastModel;
+  if (!apiKey || apiKey === "MY_GEMINI_API_KEY" || apiKey === "your_real_key_here") {
+    return [];
   }
+  try {
+    const ai = new GoogleGenAI({ apiKey });
+    const response = await ai.models.list();
+    const modelNames = [];
+    for await (const m of response) {
+      const name = m.name ? m.name.replace(/^models\//, "") : "";
+      if (name) {
+        modelNames.push(name);
+      }
+    }
+    if (modelNames.length > 0) {
+      discoveredModelsCache = {
+        models: modelNames,
+        lastDiscoveredAt: now
+      };
+      console.log(`[AI Model Discovery] Discovered ${modelNames.length} available Gemini models for API key.`);
+      return modelNames;
+    }
+  } catch (err) {
+    console.warn(`[AI Model Discovery] Dynamic query notice (${err.message || err}). Using standard resilient models.`);
+  }
+  return [];
+}
+function resolveModel(operation, requestedModel, availableModels = []) {
+  const defaultFast = "gemini-2.5-flash";
+  const defaultStrong = "gemini-2.5-pro";
+  const envFast = process.env.GEMINI_FAST_MODEL?.trim();
+  const envStrong = process.env.GEMINI_STRONG_MODEL?.trim();
+  if (requestedModel) {
+    const cleanRequested = requestedModel.replace(/^models\//, "").trim();
+    if (availableModels.length === 0 || availableModels.includes(cleanRequested)) {
+      return cleanRequested;
+    }
+  }
+  const isStrongOp = operation === "reasoning" || operation === "document" || operation === "deep_analysis";
+  if (isStrongOp) {
+    if (envStrong && (availableModels.length === 0 || availableModels.includes(envStrong))) {
+      return envStrong;
+    }
+    const strongCandidates = [
+      "gemini-2.5-pro",
+      "gemini-3.1-pro-preview",
+      "gemini-2.5-flash",
+      "gemini-flash-latest"
+    ];
+    for (const candidate of strongCandidates) {
+      if (availableModels.length === 0 || availableModels.includes(candidate)) {
+        return candidate;
+      }
+    }
+    return defaultStrong;
+  } else {
+    if (envFast && (availableModels.length === 0 || availableModels.includes(envFast))) {
+      return envFast;
+    }
+    const fastCandidates = [
+      "gemini-2.5-flash",
+      "gemini-flash-latest",
+      "gemini-3.1-flash-lite",
+      "gemini-2.5-pro"
+    ];
+    for (const candidate of fastCandidates) {
+      if (availableModels.length === 0 || availableModels.includes(candidate)) {
+        return candidate;
+      }
+    }
+    return defaultFast;
+  }
+}
+function getFallbackModelChain(primaryModel, operation, availableModels = []) {
+  const chain = [primaryModel];
+  const isStrongOp = operation === "reasoning" || operation === "document" || operation === "deep_analysis";
+  const preferredPool = isStrongOp ? ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-flash-latest"] : ["gemini-2.5-flash", "gemini-flash-latest", "gemini-3.1-flash-lite", "gemini-2.5-pro"];
+  for (const candidate of preferredPool) {
+    if (!chain.includes(candidate)) {
+      if (availableModels.length === 0 || availableModels.includes(candidate)) {
+        chain.push(candidate);
+      }
+    }
+  }
+  if (chain.length === 1) {
+    const backup = isStrongOp ? "gemini-2.5-flash" : "gemini-2.5-pro";
+    if (!chain.includes(backup)) {
+      chain.push(backup);
+    }
+  }
+  return chain;
+}
+function isModelUnavailableError(error) {
+  if (!error) return false;
+  const errMsg = (error?.message || String(error)).toLowerCase();
+  const status = error?.status || error?.statusCode;
+  if (status === 429 || errMsg.includes("429") || errMsg.includes("quota") || errMsg.includes("resource_exhausted")) {
+    return false;
+  }
+  if (status === 401 || errMsg.includes("api key") || errMsg.includes("api_key") || errMsg.includes("unauthenticated")) {
+    return false;
+  }
+  if (status === 400 && (errMsg.includes("invalid argument") || errMsg.includes("context") || errMsg.includes("token"))) {
+    return false;
+  }
+  return status === 404 || errMsg.includes("not found for api version") || errMsg.includes("model not found") || errMsg.includes("is not found") || errMsg.includes("model") && (errMsg.includes("not supported") || errMsg.includes("is unavailable") || errMsg.includes("unsupported model"));
 }
 function validateOperation(op) {
   if (op === "reasoning" || op === "document" || op === "file_analysis" || op === "deep_analysis") {
@@ -1144,6 +1280,58 @@ async function authenticateRequestUser(req) {
   const diagnosis = await authenticateRequestDetails(req);
   return diagnosis.userId;
 }
+async function isUserAdmin(userId, req) {
+  if (!userId) return false;
+  const adminIds = (process.env.ADMIN_TELEGRAM_IDS || "").split(",").map((s) => s.trim()).filter(Boolean);
+  let telegramIdStr = "";
+  if (userId.startsWith("tg_")) {
+    telegramIdStr = userId.replace("tg_", "");
+  }
+  if (telegramIdStr && adminIds.includes(telegramIdStr)) {
+    return true;
+  }
+  if (req) {
+    const rawAuth = req.headers.authorization || req.headers.Authorization || "";
+    const token = rawAuth.replace(/^Bearer\s+/i, "").trim();
+    if (token) {
+      const sessionResult = verifySessionToken(token);
+      if (sessionResult.valid && sessionResult.payload?.role === "admin") {
+        return true;
+      }
+      if (sessionResult.valid && sessionResult.payload?.telegramId && adminIds.includes(String(sessionResult.payload.telegramId))) {
+        return true;
+      }
+      if (admin.apps.length > 0 && firebaseAdminState.credentialMode === "service_account_cert") {
+        try {
+          const decoded = await admin.auth().verifyIdToken(token);
+          if (decoded?.role === "admin" || decoded?.admin === true) {
+            return true;
+          }
+          if (decoded?.email && (decoded.email === "arslonovazamat11@gmail.com" || decoded.email === "admin@dastyorchi.uz")) {
+            return true;
+          }
+        } catch {
+        }
+      }
+    }
+  }
+  if (dbAdmin) {
+    try {
+      const snap = await dbAdmin.collection("users").doc(userId).get();
+      if (snap.exists) {
+        const data = snap.data();
+        if (data?.role === "admin") return true;
+        if (data?.telegramId && adminIds.includes(String(data.telegramId))) return true;
+        if (data?.email && (data.email === "arslonovazamat11@gmail.com" || data.email === "admin@dastyorchi.uz")) return true;
+      }
+    } catch (err) {
+      console.error("[AdminCheck] Firestore check error:", err);
+    }
+  } else if (!isProductionEnvironment()) {
+    return true;
+  }
+  return false;
+}
 var app = express();
 console.log("[Vercel API] Express app loaded");
 console.log("[Vercel API] Runtime initialized");
@@ -1369,6 +1557,89 @@ apiRouter.post("/auth/telegram", async (req, res) => {
     return res.status(500).json({ error: "Avtorizatsiyada server xatoligi yuz berdi: " + (err.message || "") });
   }
 });
+apiRouter.get("/telegram/webhook", (req, res) => {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
+  const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim();
+  const webAppUrl = process.env.TELEGRAM_WEBAPP_URL?.trim() || "https://dastyorchi.vercel.app";
+  return res.json({
+    status: "online",
+    service: "Dastyorchi Telegram Bot Webhook Gateway",
+    botConfigured: Boolean(botToken),
+    webhookSecretConfigured: Boolean(webhookSecret),
+    webAppUrl
+  });
+});
+apiRouter.post("/telegram/webhook", async (req, res) => {
+  try {
+    const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim();
+    if (webhookSecret) {
+      const incomingSecret = req.headers["x-telegram-bot-api-secret-token"];
+      if (incomingSecret !== webhookSecret) {
+        console.warn("[Telegram Webhook] Unauthorized request: secret token mismatch");
+        return res.status(403).json({ error: "Unauthorized webhook secret" });
+      }
+    }
+    const botToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
+    if (!botToken) {
+      console.warn("[Telegram Webhook] Received update but TELEGRAM_BOT_TOKEN is not configured");
+      return res.status(200).json({ ok: true, message: "Bot token not configured on server" });
+    }
+    const update = req.body || {};
+    const message = update.message || update.edited_message;
+    if (!message || !message.chat?.id) {
+      return res.status(200).json({ ok: true, ignored: true });
+    }
+    const chatId = message.chat.id;
+    const text = (message.text || "").trim();
+    const firstName = message.from?.first_name || "";
+    const webAppUrl = process.env.TELEGRAM_WEBAPP_URL?.trim() || "https://dastyorchi.vercel.app";
+    console.log(`[Telegram Webhook] Update from chatId=${chatId}, text="${text.slice(0, 30)}"`);
+    const isStart = text.startsWith("/start");
+    const welcomeText = `Assalomu alaykum${firstName ? `, ${firstName}` : ""}! \u{1F44B}
+
+Dastyorchi \u2014 huquqiy masalalarni tushunish, hujjatlar tayyorlash va AI yordamida huquqiy tahlil olish uchun yaratilgan aqlli yordamchi.
+
+\u2696\uFE0F Huquqiy savollarga javob
+\u{1F4C4} Ariza va hujjatlar tayyorlash
+\u{1F50E} Hujjatlarni tahlil qilish
+\u{1F4C1} Ish va hujjatlarni boshqarish
+
+Boshlash uchun quyidagi tugmani bosing.`;
+    const generalReply = `Assalomu alaykum! Dastyorchi yuridik yordamchisidan to'liq foydalanish uchun quyidagi tugma orqali ilovani oching:`;
+    const replyMarkup = {
+      inline_keyboard: [
+        [
+          {
+            text: "Dastyorchini ochish \u{1F680}",
+            web_app: {
+              url: webAppUrl
+            }
+          }
+        ]
+      ]
+    };
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 7e3);
+    fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: isStart ? welcomeText : generalReply,
+        reply_markup: replyMarkup
+      }),
+      signal: controller.signal
+    }).catch((err) => {
+      console.error("[Telegram Webhook] Failed to send Telegram message:", err?.message || err);
+    }).finally(() => {
+      clearTimeout(timeout);
+    });
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    console.error("[Telegram Webhook] Error processing update:", error);
+    return res.status(200).json({ ok: true, error: error?.message || "Handler error" });
+  }
+});
 apiRouter.get("/auth/session", async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
@@ -1529,25 +1800,155 @@ apiRouter.get("/ai/credits", async (req, res) => {
 apiRouter.get("/admin/ai-analytics", async (req, res) => {
   try {
     const userId = await authenticateRequestUser(req);
-    if (!userId) {
-      return res.status(401).json({ error: "Ruxsat etilmagan", code: "UNAUTHORIZED" });
-    }
-    let isAdmin = false;
-    if (dbAdmin) {
-      const userDoc = await dbAdmin.collection("users").doc(userId).get();
-      if (userDoc.exists && userDoc.data()?.role === "admin") {
-        isAdmin = true;
-      }
-    } else {
-      isAdmin = true;
-    }
-    if (!isAdmin) {
+    if (!userId || !await isUserAdmin(userId, req)) {
       return res.status(403).json({ error: "Faqat administratorlar uchun", code: "FORBIDDEN" });
     }
     const analytics = await getAiAnalytics(dbAdmin);
     return res.json(analytics);
   } catch (err) {
     return res.status(500).json({ error: "Analitika xatoligi: " + err.message });
+  }
+});
+apiRouter.post("/admin/subscription", async (req, res) => {
+  try {
+    const adminUserId = await authenticateRequestUser(req);
+    if (!adminUserId || !await isUserAdmin(adminUserId, req)) {
+      return res.status(403).json({ error: "Faqat administratorlar uchun", code: "FORBIDDEN" });
+    }
+    const { targetUserId, subscriptionTier, subscriptionStatus } = req.body || {};
+    if (!targetUserId || !subscriptionTier) {
+      return res.status(400).json({ error: "targetUserId va subscriptionTier talab qilinadi" });
+    }
+    const validTiers = ["free", "pro", "business"];
+    if (!validTiers.includes(subscriptionTier)) {
+      return res.status(400).json({ error: "Noto'g'ri subscriptionTier" });
+    }
+    const newLimit = DEFAULT_TIER_LIMITS[subscriptionTier] || 10;
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    if (dbAdmin) {
+      const userRef = dbAdmin.collection("users").doc(targetUserId);
+      const snap = await userRef.get();
+      if (!snap.exists) {
+        return res.status(404).json({ error: "Foydalanuvchi topilmadi" });
+      }
+      await userRef.update({
+        subscriptionTier,
+        subscriptionStatus: subscriptionStatus || "active",
+        aiCreditsDailyLimit: newLimit,
+        aiCreditsRemaining: newLimit,
+        aiCreditsUsedToday: 0,
+        requestsToday: 0,
+        exportsToday: 0,
+        updatedAt: nowIso
+      });
+    }
+    return res.json({
+      success: true,
+      targetUserId,
+      subscriptionTier,
+      subscriptionStatus: subscriptionStatus || "active",
+      dailyLimit: newLimit
+    });
+  } catch (err) {
+    return res.status(500).json({ error: "Obunani yangilashda xatolik: " + err.message });
+  }
+});
+apiRouter.post("/admin/user-action", async (req, res) => {
+  try {
+    const adminUserId = await authenticateRequestUser(req);
+    if (!adminUserId || !await isUserAdmin(adminUserId, req)) {
+      return res.status(403).json({ error: "Faqat administratorlar uchun", code: "FORBIDDEN" });
+    }
+    const { targetUserId, action, updates } = req.body || {};
+    if (!targetUserId || !action) {
+      return res.status(400).json({ error: "targetUserId va action talab qilinadi" });
+    }
+    if (!dbAdmin) {
+      return res.status(503).json({ error: "Database admin unavailable" });
+    }
+    const userRef = dbAdmin.collection("users").doc(targetUserId);
+    const snap = await userRef.get();
+    if (!snap.exists) {
+      return res.status(404).json({ error: "Foydalanuvchi topilmadi" });
+    }
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    if (action === "block") {
+      await userRef.update({ blocked: true, updatedAt: nowIso });
+    } else if (action === "unblock") {
+      await userRef.update({ blocked: false, updatedAt: nowIso });
+    } else if (action === "reset_limits") {
+      const userData = snap.data() || {};
+      const limit = userData.aiCreditsDailyLimit || 10;
+      await userRef.update({
+        requestsToday: 0,
+        exportsToday: 0,
+        aiCreditsUsedToday: 0,
+        aiCreditsRemaining: limit,
+        updatedAt: nowIso
+      });
+    } else if (action === "update" && updates) {
+      const allowedKeys = ["role", "subscriptionTier", "subscriptionStatus", "displayName", "blocked"];
+      const filteredUpdates = {};
+      for (const key of allowedKeys) {
+        if (updates[key] !== void 0) {
+          filteredUpdates[key] = updates[key];
+        }
+      }
+      filteredUpdates.updatedAt = nowIso;
+      await userRef.update(filteredUpdates);
+    } else {
+      return res.status(400).json({ error: "Noma'lum action" });
+    }
+    return res.json({ success: true, targetUserId, action });
+  } catch (err) {
+    return res.status(500).json({ error: "Amalni bajarishda xatolik: " + err.message });
+  }
+});
+apiRouter.post("/admin/payment-action", async (req, res) => {
+  try {
+    const adminUserId = await authenticateRequestUser(req);
+    if (!adminUserId || !await isUserAdmin(adminUserId, req)) {
+      return res.status(403).json({ error: "Faqat administratorlar uchun", code: "FORBIDDEN" });
+    }
+    const { paymentId, action } = req.body || {};
+    if (!paymentId || !action) {
+      return res.status(400).json({ error: "paymentId va action talab qilinadi" });
+    }
+    if (!dbAdmin) {
+      return res.status(503).json({ error: "Database admin unavailable" });
+    }
+    const pRef = dbAdmin.collection("paymentRequests").doc(paymentId);
+    const pSnap = await pRef.get();
+    if (!pSnap.exists) {
+      return res.status(404).json({ error: "To'lov so'rovi topilmadi" });
+    }
+    const payData = pSnap.data() || {};
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    if (action === "approve") {
+      const targetUid = payData.uid || payData.userId;
+      const tier = payData.tier === "business" ? "business" : "pro";
+      const amount = Number(payData.amount) || (tier === "business" ? 49.99 : 19.99);
+      if (targetUid) {
+        await upgradeUserSubscription(targetUid, tier, payData.provider || "manual", amount);
+      }
+      await pRef.update({
+        status: "approved",
+        approvedAt: nowIso,
+        approvedBy: adminUserId
+      });
+      return res.json({ success: true, status: "approved" });
+    } else if (action === "decline") {
+      await pRef.update({
+        status: "declined",
+        declinedAt: nowIso,
+        declinedBy: adminUserId
+      });
+      return res.json({ success: true, status: "declined" });
+    } else {
+      return res.status(400).json({ error: "Noma'lum action" });
+    }
+  } catch (err) {
+    return res.status(500).json({ error: "To'lov amalida xatolik: " + err.message });
   }
 });
 apiRouter.post("/ai", async (req, res) => {
@@ -1580,21 +1981,66 @@ apiRouter.post("/ai", async (req, res) => {
     });
   }
   const { contents, systemInstruction, config, model } = req.body || {};
+  if (!contents || Array.isArray(contents) && contents.length === 0) {
+    return res.status(400).json({
+      error: "So'rov matni (contents) kiritilmadi yoki noto'g'ri.",
+      code: "INVALID_CONTENTS"
+    });
+  }
+  const apiKey = process.env.GEMINI_API_KEY?.trim() || "";
+  const availableModels = apiKey ? await discoverAvailableModels(apiKey) : [];
   const operation = validateOperation(req.body?.operation);
-  const targetModel = resolveModel(operation, model);
+  const targetModel = resolveModel(operation, model, availableModels);
   const creditCost = AI_CREDIT_COSTS[operation] || 1;
+  const safeRequestedModel = model ? String(model).replace(/[^a-zA-Z0-9._-]/g, "") : "default";
+  console.log(`[AI Model] operation=${operation} requested=${safeRequestedModel} resolved=${targetModel}`);
   console.log(`[AI Gateway] authenticated uid: ${userId}`);
   console.log(`[AI Gateway] operation: ${operation}`);
   console.log(`[AI Gateway] requested credit cost: ${creditCost}`);
-  if (!acquireUserLock(userId)) {
+  const lock = acquireAIRequestLock(userId);
+  if (!lock.acquired) {
     console.log("[AI Gateway] 429_SOURCE=CONCURRENCY_LIMIT");
     console.log("[AI Gateway] final response code: CONCURRENT_REQUEST");
     return res.status(409).json({
-      error: "Oldingi so'rovingiz hali bajarilmoqda. Iltimos, uning yakunlanishini kuting.",
+      error: "Oldingi AI so\u2018rovingiz hali yakunlanmoqda. Bir oz kutib, qayta urinib ko\u2018ring.",
       code: "CONCURRENT_REQUEST"
     });
   }
+  const lockRequestId = lock.requestId;
+  let creditsReserved = false;
+  let creditsFinalized = false;
+  let creditsRefunded = false;
   let reservation = null;
+  let creditsBefore = 0;
+  const performRefund = async (reason) => {
+    if (creditsReserved && !creditsFinalized && !creditsRefunded && reservation?.requestId) {
+      creditsRefunded = true;
+      try {
+        await refundAiUsage(dbAdmin, reservation.requestId, userId, creditCost, reason);
+        console.log(`[AI Gateway] Atomically refunded ${creditCost} credit(s) to user ${userId}. Final visible credits: ${creditsBefore}`);
+      } catch (refundErr) {
+        console.error("[AI Gateway] Error in refund:", refundErr.message);
+      }
+    }
+  };
+  const PROVIDER_TIMEOUT_MS = 75e3;
+  const abortController = new AbortController();
+  let isTimedOut = false;
+  let isClientDisconnected = false;
+  const onClientDisconnect = () => {
+    if (!res.writableEnded) {
+      isClientDisconnected = true;
+      console.log("[AI Gateway] client disconnected");
+      abortController.abort(new Error("CLIENT_DISCONNECTED"));
+    }
+  };
+  req.on("aborted", onClientDisconnect);
+  res.on("close", onClientDisconnect);
+  let timeoutTimer = setTimeout(() => {
+    isTimedOut = true;
+    console.log("[AI Gateway] provider timeout");
+    abortController.abort(new Error("PROVIDER_TIMEOUT"));
+  }, PROVIDER_TIMEOUT_MS);
   try {
     reservation = await reserveCredits(dbAdmin, userId, operation, targetModel);
     if (!reservation.allowed) {
@@ -1637,14 +2083,19 @@ apiRouter.post("/ai", async (req, res) => {
         code: reservation.code || "RESERVATION_FAILED"
       });
     }
-    const creditsBefore = reservation.creditsRemaining + creditCost;
+    creditsReserved = true;
+    creditsBefore = reservation.creditsRemaining + creditCost;
     const creditsAfter = reservation.creditsRemaining;
     console.log(`[AI Gateway] credits before: ${creditsBefore}`);
     console.log(`[AI Gateway] credits after reservation: ${creditsAfter}`);
     console.log(`[AI Gateway] resolved model: ${targetModel}`);
-    const apiKey = process.env.GEMINI_API_KEY?.trim() || "";
-    if (!apiKey || apiKey === "MY_GEMINI_API_KEY" || apiKey === "your_real_key_here") {
-      await refundAiUsage(dbAdmin, reservation.requestId, userId, creditCost, "Server GEMINI_API_KEY missing");
+    if (isClientDisconnected || res.writableEnded) {
+      await performRefund("Client disconnected during reservation");
+      return;
+    }
+    const apiKey2 = process.env.GEMINI_API_KEY?.trim() || "";
+    if (!apiKey2 || apiKey2 === "MY_GEMINI_API_KEY" || apiKey2 === "your_real_key_here") {
+      await performRefund("Server GEMINI_API_KEY missing");
       console.log("[AI Gateway] final response code: AI_CONFIGURATION_ERROR");
       return res.status(503).json({
         error: "Serverda Gemini API sozlanmagan (GEMINI_API_KEY mavjud emas). Iltimos, administratorga murojaat qiling.",
@@ -1654,30 +2105,67 @@ apiRouter.post("/ai", async (req, res) => {
       });
     }
     console.log("[AI Gateway] provider request start");
-    const genAI = new GoogleGenAI({
-      apiKey,
+    const genAI = new GoogleGenAI2({
+      apiKey: apiKey2,
       httpOptions: {
         headers: {
           "User-Agent": "dastyorchi-ai-gateway"
         }
       }
     });
-    const result = await genAI.models.generateContent({
-      model: targetModel,
-      contents,
-      config: {
-        ...config,
-        maxOutputTokens: 8192,
-        systemInstruction
+    const modelChain = getFallbackModelChain(targetModel, operation, availableModels);
+    let successfulModel = targetModel;
+    let result = null;
+    let lastModelError = null;
+    for (let i = 0; i < modelChain.length; i++) {
+      const currentModelCandidate = modelChain[i];
+      if (isClientDisconnected || isTimedOut || res.writableEnded) break;
+      try {
+        console.log(`[AI Gateway] Attempting model: ${currentModelCandidate} (try ${i + 1}/${modelChain.length})`);
+        result = await genAI.models.generateContent({
+          model: currentModelCandidate,
+          contents,
+          config: {
+            ...config,
+            maxOutputTokens: 8192,
+            systemInstruction,
+            abortSignal: abortController.signal
+          }
+        });
+        successfulModel = currentModelCandidate;
+        lastModelError = null;
+        break;
+      } catch (candidateErr) {
+        lastModelError = candidateErr;
+        const isModelUnavail = isModelUnavailableError(candidateErr);
+        if (isModelUnavail && i < modelChain.length - 1 && !isClientDisconnected && !isTimedOut) {
+          console.log("[AI Model] primary unavailable, attempting fallback");
+          console.warn(`[AI Gateway] Model candidate '${currentModelCandidate}' unavailable. Advancing to fallback model...`);
+          continue;
+        } else {
+          throw candidateErr;
+        }
       }
-    });
+    }
+    if (!result && lastModelError) {
+      throw lastModelError;
+    }
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
+      timeoutTimer = null;
+    }
+    if (isClientDisconnected || res.writableEnded) {
+      console.log("[AI Gateway] Client disconnected before response was finalized");
+      await performRefund("Client disconnected before response was sent");
+      return;
+    }
     const text = result.text;
     if (!text || typeof text !== "string") {
       throw new Error("Provider returned empty response");
     }
     console.log("[AI Gateway] provider response status: 200");
     console.log("[AI Gateway] provider error category: NONE");
-    console.log("[AI Gateway] final response code: SUCCESS");
+    console.log(`[AI Gateway] final response code: SUCCESS (model: ${successfulModel})`);
     const usageMetadata = result.usageMetadata || {};
     const inputTokens = usageMetadata.promptTokenCount || 0;
     const outputTokens = usageMetadata.candidatesTokenCount || 0;
@@ -1687,105 +2175,203 @@ apiRouter.post("/ai", async (req, res) => {
       outputTokens,
       totalTokens
     });
-    return res.json({
-      text,
-      creditsRemaining: reservation.creditsRemaining,
-      creditsDailyLimit: reservation.creditsDailyLimit,
-      creditsUsedToday: reservation.creditsUsedToday,
-      creditCost,
-      requestId: reservation.requestId,
-      model: targetModel
-    });
+    creditsFinalized = true;
+    if (!res.writableEnded) {
+      return res.json({
+        text,
+        creditsRemaining: reservation.creditsRemaining,
+        creditsDailyLimit: reservation.creditsDailyLimit,
+        creditsUsedToday: reservation.creditsUsedToday,
+        creditCost,
+        requestId: reservation.requestId,
+        model: successfulModel
+      });
+    }
   } catch (error) {
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
+      timeoutTimer = null;
+    }
     const errorMessage = typeof error === "object" ? error.message || JSON.stringify(error) : String(error);
     const errLower = errorMessage.toLowerCase();
     const providerStatus = error?.status || error?.statusCode || (errLower.includes("resource_exhausted") || errLower.includes("429") ? 429 : 500);
     const providerErrorCode = error?.code || error?.error?.code || (errLower.includes("resource_exhausted") ? "RESOURCE_EXHAUSTED" : void 0);
     const providerErrorType = error?.error?.status || error?.name || "ProviderError";
     const retryAfter = error?.response?.headers?.get?.("retry-after") || error?.retryAfter;
+    await performRefund(errorMessage);
+    if (isClientDisconnected || error?.message === "CLIENT_DISCONNECTED") {
+      console.log("[AI Gateway] Request terminated due to client disconnect, cleanup complete");
+      return;
+    }
+    if (isTimedOut || error?.code === "PROVIDER_TIMEOUT" || error?.message === "PROVIDER_TIMEOUT" || errLower.includes("timeout") || errLower.includes("deadline exceeded")) {
+      console.log("[AI Gateway] provider response status: 504");
+      console.log("[AI Gateway] provider error category: PROVIDER_TIMEOUT");
+      console.log("[AI Gateway] final response code: PROVIDER_TIMEOUT");
+      if (!res.writableEnded) {
+        return res.status(504).json({
+          code: "PROVIDER_TIMEOUT",
+          error: "AI javobi belgilangan vaqtda kelmadi. Qayta urinib ko\u2018ring.",
+          refunded: true,
+          creditsRemaining: creditsBefore
+        });
+      }
+      return;
+    }
     console.log(`[AI Gateway] provider status: ${providerStatus}`);
     if (providerErrorCode) console.log(`[AI Gateway] provider error code: ${providerErrorCode}`);
     console.log(`[AI Gateway] provider error type: ${providerErrorType}`);
     console.log(`[AI Gateway] model name: ${targetModel}`);
     if (retryAfter) console.log(`[AI Gateway] retry-after: ${retryAfter}`);
-    if (reservation && reservation.allowed) {
-      try {
-        await refundAiUsage(dbAdmin, reservation.requestId, userId, creditCost, errorMessage);
-        console.log(`[AI Gateway] Atomically refunded ${creditCost} credit(s) to user ${userId}. Final visible credits: ${reservation.creditsRemaining + creditCost}`);
-      } catch (refundErr) {
-        console.error("[AI Gateway] Error in refund:", refundErr.message);
-      }
-    }
     const isQuotaOrRateLimit = errLower.includes("429") || errLower.includes("quota") || errLower.includes("resource_exhausted") || providerStatus === 429;
     if (isQuotaOrRateLimit) {
       console.log("[AI Gateway] provider response status: 429");
       console.log("[AI Gateway] provider error category: RESOURCE_EXHAUSTED");
       console.log("[AI Gateway] 429_SOURCE=PROVIDER_RATE_LIMIT");
       console.log("[AI Gateway] final response code: PROVIDER_RATE_LIMIT");
-      return res.status(429).json({
-        code: "PROVIDER_RATE_LIMIT",
-        error: "AI provayderining vaqtinchalik limiti tugadi.",
-        provider: "gemini",
-        refunded: true,
-        creditsRemaining: reservation ? reservation.creditsRemaining + creditCost : void 0,
-        creditsDailyLimit: reservation?.creditsDailyLimit
-      });
+      if (!res.writableEnded) {
+        return res.status(429).json({
+          code: "PROVIDER_RATE_LIMIT",
+          error: "AI provayderining vaqtinchalik limiti tugadi.",
+          provider: "gemini",
+          refunded: true,
+          creditsRemaining: creditsBefore,
+          creditsDailyLimit: reservation?.creditsDailyLimit
+        });
+      }
+      return;
     }
     if (errLower.includes("api_key_invalid") || errLower.includes("api key not valid") || errLower.includes("api key invalid") || errLower.includes("401") && (errLower.includes("key") || errLower.includes("credential") || errLower.includes("unauthenticated"))) {
       console.log("[AI Gateway] provider response status: 401");
       console.log("[AI Gateway] provider error category: PROVIDER_AUTH_ERROR");
       console.log("[AI Gateway] final response code: PROVIDER_AUTH_ERROR");
-      return res.status(500).json({
-        code: "PROVIDER_AUTH_ERROR",
-        error: "Gemini API provayderi autentifikatsiyasida xatolik yuz berdi (GEMINI_API_KEY xato). Kreditlaringiz qaytarildi.",
-        refunded: true,
-        creditsRemaining: reservation ? reservation.creditsRemaining + creditCost : void 0
-      });
+      if (!res.writableEnded) {
+        return res.status(500).json({
+          code: "PROVIDER_AUTH_ERROR",
+          error: "Gemini API provayderi autentifikatsiyasida xatolik yuz berdi (GEMINI_API_KEY xato). Kreditlaringiz qaytarildi.",
+          refunded: true,
+          creditsRemaining: creditsBefore
+        });
+      }
+      return;
     }
-    if (errLower.includes("not found") || errLower.includes("is not found for api version") || errLower.includes("models/") || errLower.includes("model") && (errLower.includes("not supported") || errLower.includes("unavailable") || errLower.includes("not found"))) {
+    if (isModelUnavailableError(error)) {
       console.log("[AI Gateway] provider response status: 503");
       console.log("[AI Gateway] provider error category: MODEL_NOT_AVAILABLE");
       console.log("[AI Gateway] final response code: MODEL_NOT_AVAILABLE");
-      return res.status(503).json({
-        code: "MODEL_NOT_AVAILABLE",
-        error: "Tanlangan Gemini modeli hozirda mavjud emas yoki qo'llab-quvvatlanmaydi.",
-        refunded: true,
-        creditsRemaining: reservation ? reservation.creditsRemaining + creditCost : void 0
-      });
+      if (!res.writableEnded) {
+        return res.status(503).json({
+          code: "MODEL_NOT_AVAILABLE",
+          error: "Tanlangan Gemini modeli hozirda mavjud emas yoki qo'llab-quvvatlanmaydi.",
+          refunded: true,
+          creditsRemaining: creditsBefore
+        });
+      }
+      return;
     }
     if (errLower.includes("413") || errLower.includes("payload") || errLower.includes("body too large")) {
       console.log("[AI Gateway] provider response status: 413");
       console.log("[AI Gateway] provider error category: PAYLOAD_TOO_LARGE");
       console.log("[AI Gateway] final response code: PAYLOAD_TOO_LARGE");
-      return res.status(413).json({
-        code: "PAYLOAD_TOO_LARGE",
-        error: "Yuborilgan fayl yoki matn hajmi juda katta. Kreditlaringiz qaytarildi.",
-        refunded: true,
-        creditsRemaining: reservation ? reservation.creditsRemaining + creditCost : void 0
-      });
+      if (!res.writableEnded) {
+        return res.status(413).json({
+          code: "PAYLOAD_TOO_LARGE",
+          error: "Yuborilgan fayl yoki matn hajmi juda katta. Kreditlaringiz qaytarildi.",
+          refunded: true,
+          creditsRemaining: creditsBefore
+        });
+      }
+      return;
     }
     if (errLower.includes("context_length_exceeded") || errLower.includes("context overflow")) {
       console.log("[AI Gateway] provider response status: 400");
       console.log("[AI Gateway] provider error category: CONTEXT_OVERFLOW");
       console.log("[AI Gateway] final response code: CONTEXT_OVERFLOW");
-      return res.status(400).json({
-        code: "CONTEXT_OVERFLOW",
-        error: "Suhbat tarixi yoki hujjat hajmi model chegarasidan oshib ketdi. Kreditlaringiz qaytarildi.",
-        refunded: true,
-        creditsRemaining: reservation ? reservation.creditsRemaining + creditCost : void 0
-      });
+      if (!res.writableEnded) {
+        return res.status(400).json({
+          code: "CONTEXT_OVERFLOW",
+          error: "Suhbat tarixi yoki hujjat hajmi model chegarasidan oshib ketdi. Kreditlaringiz qaytarildi.",
+          refunded: true,
+          creditsRemaining: creditsBefore
+        });
+      }
+      return;
     }
     console.log(`[AI Gateway] provider response status: ${providerStatus}`);
     console.log("[AI Gateway] provider error category: SERVER_ERROR");
     console.log("[AI Gateway] final response code: SERVER_ERROR");
-    return res.status(500).json({
-      code: "SERVER_ERROR",
-      error: "AI xizmatida vaqtinchalik nosozlik yuz berdi. Kreditlaringiz hisobingizga qaytarildi. Iltimos, qayta urinib ko'ring.",
-      refunded: true,
-      creditsRemaining: reservation ? reservation.creditsRemaining + creditCost : void 0
-    });
+    if (!res.writableEnded) {
+      return res.status(500).json({
+        code: "SERVER_ERROR",
+        error: "AI xizmatida vaqtinchalik nosozlik yuz berdi. Kreditlaringiz hisobingizga qaytarildi. Iltimos, qayta urinib ko'ring.",
+        refunded: true,
+        creditsRemaining: creditsBefore
+      });
+    }
   } finally {
-    releaseUserLock(userId);
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
+      timeoutTimer = null;
+    }
+    req.off("aborted", onClientDisconnect);
+    res.off("close", onClientDisconnect);
+    releaseAIRequestLock(userId, lockRequestId);
+  }
+});
+apiRouter.post("/export/check-and-consume", async (req, res) => {
+  try {
+    const authInspection = await authenticateRequestDetails(req);
+    const userId = authInspection.userId;
+    if (!userId) {
+      const isExpired = authInspection.sessionFailReason === "expired";
+      return res.status(401).json({
+        error: isExpired ? "Session expired" : "Authentication required",
+        code: isExpired ? "SESSION_EXPIRED" : "AUTH_REQUIRED"
+      });
+    }
+    const todayStr = getTashkentDateString();
+    if (!dbAdmin) {
+      return res.json({ allowed: true, exportsToday: 1, limit: 3, remaining: 2 });
+    }
+    const userRef = dbAdmin.collection("users").doc(userId);
+    const snap = await userRef.get();
+    if (!snap.exists) {
+      return res.json({ allowed: true, exportsToday: 1, limit: 3, remaining: 2 });
+    }
+    const userData = snap.data() || {};
+    const tier = userData.subscriptionTier === "pro" || userData.subscriptionTier === "business" ? userData.subscriptionTier : "free";
+    if (tier === "pro" || tier === "business") {
+      return res.json({ allowed: true, tier, unlimited: true, exportsToday: userData.exportsToday || 0 });
+    }
+    let exportsToday = Number(userData.exportsToday) || 0;
+    const lastReset = userData.lastExportResetDate || "";
+    if (lastReset !== todayStr) {
+      exportsToday = 0;
+    }
+    const FREE_LIMIT = 3;
+    if (exportsToday >= FREE_LIMIT) {
+      return res.status(429).json({
+        allowed: false,
+        error: "Bugungi bepul eksport limitingiz (3 ta) tugadi. Cheksiz eksport qilish uchun Pro tarifiga o'ting.",
+        code: "EXPORT_LIMIT_REACHED",
+        exportsToday,
+        limit: FREE_LIMIT,
+        remaining: 0
+      });
+    }
+    const newExports = exportsToday + 1;
+    await userRef.update({
+      exportsToday: newExports,
+      lastExportResetDate: todayStr,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    return res.json({
+      allowed: true,
+      exportsToday: newExports,
+      limit: FREE_LIMIT,
+      remaining: Math.max(0, FREE_LIMIT - newExports)
+    });
+  } catch (err) {
+    return res.status(500).json({ error: "Eksportni tekshirishda xatolik: " + err.message });
   }
 });
 apiRouter.post("/export/docx", async (req, res) => {
@@ -2218,5 +2804,6 @@ export {
   app_default as default,
   firebaseAdminState,
   firebaseInitStatus,
+  isUserAdmin,
   verifySessionToken
 };

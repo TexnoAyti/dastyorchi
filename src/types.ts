@@ -113,7 +113,10 @@ export interface Case {
   deadlines: Deadline[];
   evidence: Evidence[];
   courtPackage?: CourtPackage;
-  winningProbability?: number;
+  proceduralReadiness?: number;
+  evidenceStrength?: "Kuchli" | "O'rta" | "Yetarli emas" | string;
+  missingInformation?: string[];
+  winningProbability?: number; // legacy compatibility
   riskLevel?: string;
   strengths?: string[];
   weaknesses?: string[];
@@ -154,7 +157,10 @@ export interface ChatSession {
   isPrivate?: boolean;
   isBusinessMode?: boolean;
   document?: string;
-  winningProbability?: number;
+  proceduralReadiness?: number;
+  evidenceStrength?: string;
+  missingInformation?: string[];
+  winningProbability?: number; // legacy compatibility
   riskLevel?: string;
   strengths?: string[];
   weaknesses?: string[];

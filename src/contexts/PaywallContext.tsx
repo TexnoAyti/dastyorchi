@@ -6,6 +6,7 @@ import {
 import { auth, db } from "../firebase";
 import { doc, getDoc, setDoc, addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { getPlanLimits, PlanLimits, DEFAULT_PLAN_LIMITS } from "../services/subscriptionService";
+import { getApiAuthorizationHeader } from "../services/apiAuth";
 
 type PaywallVariant = "requests" | "exports" | "advanced" | "general";
 
@@ -48,11 +49,14 @@ export function PaywallProvider({ children }: { children: React.ReactNode }) {
     }
     setIsRedirecting(true);
     try {
+      const authHeaders = await getApiAuthorizationHeader();
       const resp = await fetch("/api/payment/create-invoice", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders
+        },
         body: JSON.stringify({
-          userId: auth.currentUser.uid,
           tier: selectedTier,
           paymentMethod: paymentMethod, // click or payme
           returnUrl: window.location.href
@@ -103,6 +107,7 @@ export function PaywallProvider({ children }: { children: React.ReactNode }) {
       
       // Add manual payment request for Admin approval
       await addDoc(collection(db, "paymentRequests"), {
+        userId: auth.currentUser.uid,
         uid: auth.currentUser.uid,
         email: auth.currentUser.email || "anon@example.com",
         displayName: auth.currentUser.displayName || "Foydalanuvchi",

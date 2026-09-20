@@ -114,7 +114,6 @@ export function UserProfile({ user }: { user?: any }) {
       await updateDoc(userDocRef, {
         displayName: displayName.trim(),
         avatarUrl,
-        subscriptionTier,
         updatedAt: new Date().getTime()
       });
 
