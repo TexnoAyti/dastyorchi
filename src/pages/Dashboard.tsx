@@ -15,7 +15,6 @@ interface CaseItem {
   title: string;
   category?: string;
   status: "active" | "inprogress" | "closed" | "archived" | string;
-  winningProbability?: number;
   riskLevel?: string;
   createdAt: number;
 }

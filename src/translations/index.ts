@@ -92,7 +92,7 @@ export interface TranslationSchema {
     uploadedAt: string;
     buildPackage: string;
     packageSub: string;
-    winningProbability: string;
+    proceduralReadiness: string;
     riskLevel: string;
     noCases: string;
     noEvidence: string;
@@ -275,7 +275,7 @@ export const translations: Record<Language, TranslationSchema> = {
       uploadedAt: "Yuklangan vaqt",
       buildPackage: "Sud paketini yig'ish",
       packageSub: "Dalillar va arizalarni tizimli tartiblash",
-      winningProbability: "Tayyorgarlik darajasi",
+      proceduralReadiness: "Tayyorgarlik darajasi",
       riskLevel: "Xavf darajasi",
       noCases: "Hozircha sud ishlari yaratilmagan.",
       noEvidence: "Ushbu ish bo'yicha dalillar yuklanmagan.",
@@ -456,7 +456,7 @@ export const translations: Record<Language, TranslationSchema> = {
       uploadedAt: "Юкланган вақт",
       buildPackage: "Суд пакетини йиғиш",
       packageSub: "Далиллар ва аризаларни тизимли тартиблаш",
-      winningProbability: "Тайёргарлик даражаси",
+      proceduralReadiness: "Тайёргарлик даражаси",
       riskLevel: "Хавф даражаси",
       noCases: "Ҳозирча суд ишлари яратилмаган.",
       noEvidence: "Ушбу иш бўйича далиллар юкланмаган.",
@@ -637,7 +637,7 @@ export const translations: Record<Language, TranslationSchema> = {
       uploadedAt: "Дата загрузки",
       buildPackage: "Собрать судебный пакет",
       packageSub: "Систематизация документов и доказательств",
-      winningProbability: "Процессуальная готовность",
+      proceduralReadiness: "Процессуальная готовность",
       riskLevel: "Уровень риска",
       noCases: "Судебные дела еще не созданы.",
       noEvidence: "Доказательства по этому делу еще не добавлены.",
@@ -797,7 +797,7 @@ export const translations: Record<Language, TranslationSchema> = {
     },
     cases: {
       title: "Court Docket Center",
-      sub: "Manage courtroom cases, structure evidence packages, and estimate winning probability.",
+      sub: "Manage courtroom cases, structure evidence packages, and assess procedural readiness.",
       createNew: "Initiate Case Filings",
       caseName: "Case Name",
       category: "Category",
@@ -818,7 +818,7 @@ export const translations: Record<Language, TranslationSchema> = {
       uploadedAt: "Uploaded",
       buildPackage: "Synthesize Court Package",
       packageSub: "Package all files and declarations cleanly",
-      winningProbability: "Procedural Readiness",
+      proceduralReadiness: "Procedural Readiness",
       riskLevel: "Risk Level",
       noCases: "No judicial cases created yet.",
       noEvidence: "No evidence loaded for this active file.",

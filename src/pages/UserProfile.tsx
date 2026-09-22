@@ -6,6 +6,7 @@ import { User, Mail, CreditCard, Check, Loader2, Camera, Crown, Sparkles, Save, 
 import { motion } from "framer-motion";
 import { useLanguage } from "../contexts/LanguageContext";
 import { getApiAuthorizationHeader } from "../services/apiAuth";
+import { usePaywall } from "../contexts/PaywallContext";
 
 const AVATAR_PRESETS = [
   { id: "felix", name: "Felix", url: "https://api.dicebear.com/7.x/adventurer/svg?seed=Felix" },
@@ -20,6 +21,7 @@ const AVATAR_PRESETS = [
 
 export function UserProfile({ user }: { user?: any }) {
   const { t, language, setLanguage } = useLanguage();
+  const { openPaywall } = usePaywall();
   const [currentUserData, setCurrentUserData] = useState<any>(user || null);
   const [loading, setLoading] = useState(!user);
   const [saving, setSaving] = useState(false);
@@ -479,7 +481,7 @@ export function UserProfile({ user }: { user?: any }) {
                     {/* Free Option */}
                     <button
                       type="button"
-                      onClick={() => setSubscriptionTier("free")}
+                      onClick={() => undefined}
                       className={`p-4 rounded-xl border text-left transition-all bg-white dark:bg-zinc-900 relative flex flex-col justify-between ${
                         subscriptionTier === "free"
                           ? "border-blue-600 dark:border-blue-500 bg-blue-50/20 dark:bg-blue-950/20 shadow-sm"
@@ -514,7 +516,7 @@ export function UserProfile({ user }: { user?: any }) {
                     {/* Pro Option */}
                     <button
                       type="button"
-                      onClick={() => setSubscriptionTier("pro")}
+                      onClick={() => subscriptionTier !== "pro" && openPaywall("requests")}
                       className={`p-4 rounded-xl border text-left transition-all bg-white dark:bg-zinc-900 relative overflow-hidden flex flex-col justify-between ${
                         subscriptionTier === "pro"
                           ? "border-amber-500 bg-amber-50/20 dark:bg-amber-950/20 shadow-sm ring-1 ring-amber-500"
@@ -534,10 +536,10 @@ export function UserProfile({ user }: { user?: any }) {
                           )}
                         </div>
                         <p className="text-xs text-gray-500 dark:text-zinc-400 mt-1">
-                          {language === 'uz_lat' ? 'Cheksiz so\'rovlar va eksport, Tahlil, Strategiya' : 
-                           language === 'uz_cyr' ? 'Чексиз сўровлар ва экспорт, Таҳлил, Стратегия' : 
-                           language === 'ru' ? 'Безлимитные опции, Аналитика, Стратегия и Планы' : 
-                           'Unlimited queries, exports, analysis and strategy plans'}
+                          {language === 'uz_lat' ? 'Kuniga 100 AI kredit, cheksiz eksport, Tahlil va Strategiya' : 
+                           language === 'uz_cyr' ? 'Кунига 100 AI кредит, чексиз экспорт, Таҳлил ва Стратегия' : 
+                           language === 'ru' ? '100 AI-кредитов в день, безлимитный экспорт, аналитика и стратегия' : 
+                           '100 AI credits/day, unlimited exports, analysis and strategy'}
                         </p>
                       </div>
                       <div className="mt-4">
@@ -550,7 +552,7 @@ export function UserProfile({ user }: { user?: any }) {
                     {/* Business Option */}
                     <button
                       type="button"
-                      onClick={() => setSubscriptionTier("business")}
+                      onClick={() => subscriptionTier !== "business" && openPaywall("requests")}
                       className={`p-4 rounded-xl border text-left transition-all bg-white dark:bg-zinc-900 relative overflow-hidden flex flex-col justify-between ${
                         subscriptionTier === "business"
                           ? "border-indigo-600 bg-indigo-50/20 dark:bg-indigo-950/20 shadow-sm ring-1 ring-indigo-600"
@@ -570,10 +572,10 @@ export function UserProfile({ user }: { user?: any }) {
                           )}
                         </div>
                         <p className="text-xs text-gray-500 dark:text-zinc-400 mt-1">
-                          {language === 'uz_lat' ? 'Pro + Ustuvorlik, Kengaytirilgan chuqur tahlil' : 
-                           language === 'uz_cyr' ? 'Pro + Устуворлик, Кенгайтирилган чуқур таҳлил' : 
-                           language === 'ru' ? 'Pro + Выделенный приоритет, Расширенный аудит' : 
-                           'Pro benefits + High Priority, Deep audit of cases'}
+                          {language === 'uz_lat' ? 'Kuniga 300 AI kredit, Pro imkoniyatlari + chuqur tahlil' : 
+                           language === 'uz_cyr' ? 'Кунига 300 AI кредит, Pro имкониятлари + чуқур таҳлил' : 
+                           language === 'ru' ? '300 AI-кредитов в день, возможности Pro + углублённый анализ' : 
+                           '300 AI credits/day, Pro benefits + deep case analysis'}
                         </p>
                       </div>
                       <div className="mt-4">
