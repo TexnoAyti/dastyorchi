@@ -799,9 +799,9 @@ If unsure -> default to:
           parsed.content = cleanAndValidateHTML(parsed.content);
         }
         if (parsed.analysis) {
-          const readiness = parsed.analysis.proceduralReadiness ?? parsed.analysis.winningProbability ?? 50;
-          parsed.analysis.proceduralReadiness = readiness;
-          parsed.analysis.winningProbability = readiness;
+          const readiness = parsed.analysis.proceduralReadiness ?? 50;
+          parsed.analysis.proceduralReadiness = Math.max(0, Math.min(100, Number(readiness) || 50));
+          if ("winningProbability" in parsed.analysis) delete parsed.analysis.winningProbability;
           parsed.analysis.evidenceStrength = parsed.analysis.evidenceStrength || "O'rta";
           parsed.analysis.missingInformation = Array.isArray(parsed.analysis.missingInformation) ? parsed.analysis.missingInformation : [];
         }
@@ -816,7 +816,6 @@ If unsure -> default to:
             proceduralReadiness: 50, 
             evidenceStrength: "O'rta", 
             missingInformation: [], 
-            winningProbability: 50, 
             riskLevel: "", 
             strengths: [], 
             weaknesses: [], 
@@ -886,9 +885,9 @@ If unsure -> default to:
         parsed.content = cleanAndValidateHTML(parsed.content);
       }
       if (parsed.analysis) {
-        const readiness = parsed.analysis.proceduralReadiness ?? parsed.analysis.winningProbability ?? 50;
-        parsed.analysis.proceduralReadiness = readiness;
-        parsed.analysis.winningProbability = readiness;
+        const readiness = parsed.analysis.proceduralReadiness ?? 50;
+        parsed.analysis.proceduralReadiness = Math.max(0, Math.min(100, Number(readiness) || 50));
+        if ("winningProbability" in parsed.analysis) delete parsed.analysis.winningProbability;
         parsed.analysis.evidenceStrength = parsed.analysis.evidenceStrength || "O'rta";
         parsed.analysis.missingInformation = Array.isArray(parsed.analysis.missingInformation) ? parsed.analysis.missingInformation : [];
       }
@@ -903,7 +902,6 @@ If unsure -> default to:
           proceduralReadiness: 50, 
           evidenceStrength: "O'rta", 
           missingInformation: [], 
-          winningProbability: 50, 
           riskLevel: "", 
           strengths: [], 
           weaknesses: [], 
@@ -954,7 +952,12 @@ ${promptContext}
 
 Generate a FULL professional legal document in HTML based on: ${description}
 Current Date: ${currentDate}
-Requirements: Valid HTML, auto-fill all missing fields with realistic dummy data.
+Requirements:
+- Return valid, sanitized-friendly HTML.
+- NEVER invent missing factual information.
+- For any unknown name, address, date, amount, contract number, court, case number, evidence, PINFL/passport detail, or other case fact, use a clear placeholder such as ______.
+- Do not invent legal article numbers or citations.
+- Keep unknown factual fields visibly incomplete so the user can provide them.
 `;
 
   try {
@@ -967,7 +970,9 @@ Requirements: Valid HTML, auto-fill all missing fields with realistic dummy data
     return cleanAndValidateHTML(text);
   } catch (error: any) {
     console.error("AI HTML Generation Error:", error.message || error);
-    throw new Error(error.message || "Hujjatni yaratishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.");
+    throw error instanceof AIServerError
+      ? error
+      : new Error(error.message || "Hujjatni yaratishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.");
   }
 }
 
@@ -1002,7 +1007,9 @@ Return ONLY the final document text. No markdown.
     return text;
   } catch (error: any) {
     console.error("AI Generation Error:", error.message || error);
-    throw new Error(error.message || "Hujjatni yaratishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.");
+    throw error instanceof AIServerError
+      ? error
+      : new Error(error.message || "Hujjatni yaratishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring.");
   }
 }
 

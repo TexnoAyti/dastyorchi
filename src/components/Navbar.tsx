@@ -118,7 +118,7 @@ export function Navbar({ user, children }: { user: any; children?: React.ReactNo
 
   useEffect(() => {
      if (!user) return;
-     if (user.role === "admin" || user.email === "umidjonpremium6@gmail.com" || user.email === "arslonovazamat11@gmail.com") {
+     if (user.role === "admin") {
         setIsAdmin(true);
         return;
      }

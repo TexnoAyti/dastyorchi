@@ -116,7 +116,6 @@ export interface Case {
   proceduralReadiness?: number;
   evidenceStrength?: "Kuchli" | "O'rta" | "Yetarli emas" | string;
   missingInformation?: string[];
-  winningProbability?: number; // legacy compatibility
   riskLevel?: string;
   strengths?: string[];
   weaknesses?: string[];
@@ -160,7 +159,6 @@ export interface ChatSession {
   proceduralReadiness?: number;
   evidenceStrength?: string;
   missingInformation?: string[];
-  winningProbability?: number; // legacy compatibility
   riskLevel?: string;
   strengths?: string[];
   weaknesses?: string[];

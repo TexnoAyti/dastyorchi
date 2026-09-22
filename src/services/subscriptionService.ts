@@ -24,9 +24,9 @@ export interface PlanLimits {
 export const DEFAULT_PLAN_LIMITS: PlanLimits = {
   freeRequestLimit: 10,
   freeExportLimit: 3,
-  proRequestLimit: 999999, // unlimited
+  proRequestLimit: 100,
   proExportLimit: 999999, // unlimited
-  businessRequestLimit: 999999, // unlimited
+  businessRequestLimit: 300,
   businessExportLimit: 999999, // unlimited
   features: {
     riskAnalysis: ["pro", "business"],
@@ -69,80 +69,37 @@ export async function savePlanLimits(limits: PlanLimits): Promise<void> {
  * Check if the user is authorized to perform an AI Request based on their quota.
  * Automatically handles resetting counters if the day has changed.
  */
-export async function checkRequestQuota(userId: string): Promise<{ 
+export async function checkRequestQuota(_userId: string): Promise<{ 
   allowed: boolean; 
   requestsToday: number; 
   limit: number; 
   remaining: number; 
 }> {
-  const todayStr = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD
-  const userRef = doc(db, "users", userId);
-  const userSnap = await getDoc(userRef);
-  
-  if (!userSnap.exists()) {
+  // AI credits are authoritative on the server. Never mutate request counters from the client.
+  try {
+    const headers = await getApiAuthorizationHeader();
+    const res = await fetch("/api/ai/credits", { headers });
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      return { allowed: false, requestsToday: 0, limit: 0, remaining: 0 };
+    }
+
+    const limit = Number(data.creditsDailyLimit) || DEFAULT_PLAN_LIMITS.freeRequestLimit;
+    const remaining = Math.max(0, Number(data.creditsRemaining) || 0);
+    const used = Math.max(0, Number(data.creditsUsedToday) || (limit - remaining));
+
+    return {
+      allowed: remaining > 0,
+      requestsToday: used,
+      limit,
+      remaining
+    };
+  } catch (error) {
+    console.warn("[SubscriptionService] Unable to read authoritative AI credits:", error);
+    // Fail closed for preflight UI only. /api/ai remains the final authority.
     return { allowed: false, requestsToday: 0, limit: 0, remaining: 0 };
   }
-  
-  const userData = userSnap.data();
-  
-  // 1 & 2. Read and verify subscriptionTier directly from Firestore
-  let verifiedTier: SubscriptionTier = "free";
-  if (userData.subscriptionTier === "pro" || userData.subscriptionTier === "business") {
-    verifiedTier = userData.subscriptionTier;
-  }
-  
-  const limits = await getPlanLimits();
-  
-  // Decide limit based on tier
-  let limit = limits.freeRequestLimit;
-  if (verifiedTier === "pro") limit = limits.proRequestLimit;
-  if (verifiedTier === "business") limit = limits.businessRequestLimit;
-  
-  let requestsToday = userData.requestsToday || 0;
-  const lastResetDate = userData.lastRequestResetDate || "";
-  
-  if (lastResetDate !== todayStr) {
-    // New day: Reset request counters in database
-    try {
-      await updateDoc(userRef, {
-        requestsToday: 0,
-        lastRequestResetDate: todayStr
-      });
-      requestsToday = 0;
-    } catch (e) {
-      console.error("Error resetting request counter:", e);
-    }
-  }
-  
-  // 4. Pro and Business users must never see Premium paywall. This ensures they always bypass.
-  const isPremium = verifiedTier === "pro" || verifiedTier === "business";
-  const remaining = Math.max(0, limit - requestsToday);
-  const allowed = isPremium || limit === 999999 || remaining > 0;
-  
-  // 3. Premium paywall should only appear when: user is free AND user exceeded free limits OR tries to access premium feature
-  let paywallReason = "none";
-  if (!allowed) {
-    if (verifiedTier === "free" && requestsToday >= limit) {
-      paywallReason = "exceeded_requests_limit";
-    } else {
-      paywallReason = "premium_only_feature";
-    }
-  }
-
-  // 5. Add debug logging of: subscriptionTier, requestsToday, requestsLimit, paywallReason
-  console.log("[DEBUG SUBSCRIPTION SYSTEM][checkRequestQuota] Audit details:", {
-    subscriptionTier: verifiedTier,
-    requestsToday,
-    requestsLimit: limit,
-    paywallReason
-  });
-  
-  return {
-    allowed,
-    requestsToday,
-    limit,
-    remaining
-  };
 }
 
 /**
@@ -226,24 +183,10 @@ export async function checkExportQuota(userId: string): Promise<{
 /**
  * Increment the user's AI requests count. Handles reset check atomically if the date has changed.
  */
-export async function incrementUserRequests(userId: string): Promise<void> {
-  const todayStr = new Date().toLocaleDateString("en-CA");
-  const userRef = doc(db, "users", userId);
-  const userSnap = await getDoc(userRef);
-  
-  if (!userSnap.exists()) return;
-  const userData = userSnap.data();
-  
-  if (userData.lastRequestResetDate !== todayStr) {
-    await updateDoc(userRef, {
-      requestsToday: 1,
-      lastRequestResetDate: todayStr
-    });
-  } else {
-    await updateDoc(userRef, {
-      requestsToday: increment(1)
-    });
-  }
+export async function incrementUserRequests(_userId: string): Promise<void> {
+  // Deprecated compatibility shim.
+  // /api/ai atomically reserves/finalizes credits; client-side request counters are forbidden.
+  return;
 }
 
 /**

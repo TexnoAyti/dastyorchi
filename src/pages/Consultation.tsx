@@ -62,7 +62,7 @@ const LOCAL_TRANSLATIONS: Record<string, Record<string, string>> = {
     saving: "Saqlanmoqda...",
     save: "Saqlash",
     cancel: "Bekor qilish",
-    win_prob: "Tayyorgarlik darajasi",
+    readiness: "Tayyorgarlik darajasi",
     risk_level: "Xavf darajasi",
     strengths: "Kuchli taraflar",
     weaknesses: "Zaif taraflar",
@@ -150,7 +150,7 @@ const LOCAL_TRANSLATIONS: Record<string, Record<string, string>> = {
     saving: "Сақланмоқда...",
     save: "Сақлаш",
     cancel: "Бекор қилиш",
-    win_prob: "Тайёргарлик даражаси",
+    readiness: "Тайёргарлик даражаси",
     risk_level: "Хавф даражаси",
     strengths: "Кучли тарафлар",
     weaknesses: "Заиф тарафлар",
@@ -238,7 +238,7 @@ const LOCAL_TRANSLATIONS: Record<string, Record<string, string>> = {
     saving: "Сохранение...",
     save: "Сохранить",
     cancel: "Отмена",
-    win_prob: "Процессуальная готовность",
+    readiness: "Процессуальная готовность",
     risk_level: "Уровень риска",
     strengths: "Сильные стороны",
     weaknesses: "Слабые стороны",
@@ -326,7 +326,7 @@ const LOCAL_TRANSLATIONS: Record<string, Record<string, string>> = {
     saving: "Saving...",
     save: "Save",
     cancel: "Cancel",
-    win_prob: "Win rate",
+    readiness: "Procedural Readiness",
     risk_level: "Risk level",
     strengths: "Strengths",
     weaknesses: "Weaknesses",
@@ -454,7 +454,7 @@ export function Consultation({ user }: { user: any }) {
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [documentContent, setDocumentContent] = useState<string>("");
   const [analysis, setAnalysis] = useState({
-    winningProbability: 0,
+    proceduralReadiness: 0,
     riskLevel: "",
     strengths: [] as string[],
     weaknesses: [] as string[],
@@ -462,7 +462,7 @@ export function Consultation({ user }: { user: any }) {
     strategy: "",
     expertise: ""
   });
-  const [activePanel, setActivePanel] = useState<"none" | "winning" | "riskLevel" | "strengths" | "weaknesses" | "risk" | "strategy" | "expertise">("none");
+  const [activePanel, setActivePanel] = useState<"none" | "readiness" | "riskLevel" | "strengths" | "weaknesses" | "risk" | "strategy" | "expertise">("none");
   
   const [cases, setCases] = useState<Case[]>([]);
   const [profiles, setProfiles] = useState<PersonProfile[]>([]);
@@ -512,11 +512,11 @@ export function Consultation({ user }: { user: any }) {
       let htmlString = `<div style="font-family: sans-serif; padding: 20px;">`;
       htmlString += `<h1 style="text-align: center; color: #1f2937; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px;">To'liq Yuridik Analiz</h1>`;
       
-      if (analysis.winningProbability !== undefined && analysis.winningProbability > 0) {
+      if (analysis.proceduralReadiness !== undefined && analysis.proceduralReadiness > 0) {
         htmlString += `
           <div style="margin-top: 20px; padding: 15px; background: #f0fdf4; border-radius: 8px;">
             <h2 style="color: #166534; font-size: 18px; margin-bottom: 5px;">Jarayonga Tayyorgarlik Darajasi</h2>
-            <p style="font-size: 24px; font-weight: bold; color: #15803d; margin: 0;">${analysis.winningProbability}%</p>
+            <p style="font-size: 24px; font-weight: bold; color: #15803d; margin: 0;">${analysis.proceduralReadiness}%</p>
           </div>
         `;
       }
@@ -989,7 +989,7 @@ export function Consultation({ user }: { user: any }) {
       }
     ]);
     setDocumentContent("");
-    setAnalysis({ winningProbability: 0, riskLevel: "", strengths: [], weaknesses: [], risk: "", strategy: "", expertise: "" });
+    setAnalysis({ proceduralReadiness: 0, riskLevel: "", strengths: [], weaknesses: [], risk: "", strategy: "", expertise: "" });
     chatInputRef.current?.clear();
   };
 
@@ -1011,7 +1011,7 @@ export function Consultation({ user }: { user: any }) {
     ]);
     setDocumentContent("");
     setAiMode("study");
-    setAnalysis({ winningProbability: 0, riskLevel: "", strengths: [], weaknesses: [], risk: "", strategy: "", expertise: "" });
+    setAnalysis({ proceduralReadiness: 0, riskLevel: "", strengths: [], weaknesses: [], risk: "", strategy: "", expertise: "" });
   };
 
   const handleDocumentChange = async (newContent: string) => {
@@ -1075,7 +1075,7 @@ export function Consultation({ user }: { user: any }) {
       if (chatDoc) setLastSavedDocument(chatDoc);
     }
     setAnalysis({
-      winningProbability: chat.winningProbability || 0,
+      proceduralReadiness: chat.proceduralReadiness || 0,
       riskLevel: chat.riskLevel || "",
       strengths: chat.strengths || [],
       weaknesses: chat.weaknesses || [],
@@ -1207,7 +1207,7 @@ export function Consultation({ user }: { user: any }) {
         aiMode: params.aiMode
       };
       if (params.isDocument && params.response?.content) updateData.document = params.response.content;
-      if (params.response?.analysis?.winningProbability != null) updateData.winningProbability = params.response.analysis.winningProbability;
+      if (params.response?.analysis?.proceduralReadiness != null) updateData.proceduralReadiness = params.response.analysis.proceduralReadiness;
       if (params.response?.analysis?.riskLevel) updateData.riskLevel = params.response.analysis.riskLevel;
       if (params.response?.analysis?.strengths) updateData.strengths = params.response.analysis.strengths;
       if (params.response?.analysis?.weaknesses) updateData.weaknesses = params.response.analysis.weaknesses;
@@ -1336,7 +1336,7 @@ export function Consultation({ user }: { user: any }) {
       }
       
       setAnalysis(prev => ({
-        winningProbability: response?.analysis?.winningProbability ?? prev.winningProbability,
+        proceduralReadiness: response?.analysis?.proceduralReadiness ?? prev.proceduralReadiness,
         riskLevel: response?.analysis?.riskLevel || prev.riskLevel,
         strengths: response?.analysis?.strengths || prev.strengths,
         weaknesses: response?.analysis?.weaknesses || prev.weaknesses,
@@ -1358,7 +1358,7 @@ export function Consultation({ user }: { user: any }) {
       try {
         if (isDocument) {
           triggerNotification("document", language, { chatId: activeChatId || undefined });
-        } else if (response?.analysis && (response.analysis.winningProbability != null || response.analysis.riskLevel)) {
+        } else if (response?.analysis && (response.analysis.proceduralReadiness != null || response.analysis.riskLevel)) {
           triggerNotification("analysis", language, { chatId: activeChatId || undefined, analysisId: activeChatId || undefined });
         } else {
           triggerNotification("chat", language, { chatId: activeChatId || undefined });
@@ -2167,31 +2167,31 @@ export function Consultation({ user }: { user: any }) {
         {/* Accordions */}
         <div className="flex flex-col gap-3 shrink-0">
           
-          {/* Yutish Foizi */}
-          <div className={`overflow-hidden rounded-2xl border transition-all duration-300 ${activePanel === "winning" ? 'bg-white shadow-lg border-white/80' : 'bg-white/40 border-white/50 hover:bg-white/60 backdrop-blur-md'}`}>
+          {/* Protsessual tayyorgarlik */}
+          <div className={`overflow-hidden rounded-2xl border transition-all duration-300 ${activePanel === "readiness" ? 'bg-white shadow-lg border-white/80' : 'bg-white/40 border-white/50 hover:bg-white/60 backdrop-blur-md'}`}>
             <button
-              onClick={() => setActivePanel(activePanel === "winning" ? "none" : "winning")}
+              onClick={() => setActivePanel(activePanel === "readiness" ? "none" : "readiness")}
               className="w-full flex items-center justify-between p-4 focus:outline-none"
             >
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-green-100 text-green-600 rounded-xl shadow-sm"><TrendingUp className="w-5 h-5" /></div>
-                <span className="font-bold text-gray-800 tracking-tight">{lt.win_prob}</span>
+                <span className="font-bold text-gray-800 tracking-tight">{lt.readiness}</span>
               </div>
               <div className="flex items-center gap-3">
-                <span className={`font-bold ${analysis.winningProbability && analysis.winningProbability > 50 ? 'text-green-600' : 'text-gray-600'}`}>{analysis.winningProbability || 0}%</span>
-                <div className={`transition-transform duration-300 text-gray-400 ${activePanel === "winning" ? 'rotate-180' : ''}`}>
+                <span className={`font-bold ${analysis.proceduralReadiness && analysis.proceduralReadiness > 50 ? 'text-green-600' : 'text-gray-600'}`}>{analysis.proceduralReadiness || 0}%</span>
+                <div className={`transition-transform duration-300 text-gray-400 ${activePanel === "readiness" ? 'rotate-180' : ''}`}>
                   <ChevronDown className="w-5 h-5" />
                 </div>
               </div>
             </button>
-            <motion.div initial={false} animate={{ height: activePanel === "winning" ? 'auto' : 0, opacity: activePanel === "winning" ? 1 : 0 }} className="overflow-hidden">
+            <motion.div initial={false} animate={{ height: activePanel === "readiness" ? 'auto' : 0, opacity: activePanel === "readiness" ? 1 : 0 }} className="overflow-hidden">
               <div className="px-5 pb-5 pt-1 flex justify-center items-center">
                 <div className="relative w-32 h-32 flex items-center justify-center">
                   <svg className="w-full h-full transform -rotate-90">
                     <circle cx="64" cy="64" r="56" className="text-gray-200 stroke-current" strokeWidth="12" fill="transparent" />
-                    <circle cx="64" cy="64" r="56" className="text-green-500 stroke-current" strokeWidth="12" fill="transparent" strokeDasharray="351.858" strokeDashoffset={351.858 - (351.858 * (analysis.winningProbability || 0)) / 100} strokeLinecap="round" style={{ transition: "stroke-dashoffset 1s ease-in-out" }} />
+                    <circle cx="64" cy="64" r="56" className="text-green-500 stroke-current" strokeWidth="12" fill="transparent" strokeDasharray="351.858" strokeDashoffset={351.858 - (351.858 * (analysis.proceduralReadiness || 0)) / 100} strokeLinecap="round" style={{ transition: "stroke-dashoffset 1s ease-in-out" }} />
                   </svg>
-                  <span className="absolute text-3xl font-black text-gray-800">{analysis.winningProbability || 0}%</span>
+                  <span className="absolute text-3xl font-black text-gray-800">{analysis.proceduralReadiness || 0}%</span>
                 </div>
               </div>
             </motion.div>

@@ -149,7 +149,7 @@ class ChatPersistenceQueueService {
           if (item.chatMeta.aiMode) chatUpdateData.aiMode = item.chatMeta.aiMode;
           if (item.chatMeta.isBusinessMode !== undefined) chatUpdateData.isBusinessMode = item.chatMeta.isBusinessMode;
           if (item.chatMeta.document) chatUpdateData.document = item.chatMeta.document;
-          if (item.chatMeta.analysis?.winningProbability != null) chatUpdateData.winningProbability = item.chatMeta.analysis.winningProbability;
+          if (item.chatMeta.analysis?.proceduralReadiness != null) chatUpdateData.proceduralReadiness = item.chatMeta.analysis.proceduralReadiness;
           if (item.chatMeta.analysis?.riskLevel) chatUpdateData.riskLevel = item.chatMeta.analysis.riskLevel;
           if (item.chatMeta.analysis?.strengths) chatUpdateData.strengths = item.chatMeta.analysis.strengths;
           if (item.chatMeta.analysis?.weaknesses) chatUpdateData.weaknesses = item.chatMeta.analysis.weaknesses;

@@ -321,7 +321,7 @@ export function Cases({ user }: { user?: any }) {
         notes: "",
         createdAt: Date.now(),
         updatedAt: Date.now(),
-        winningProbability: 50,
+        proceduralReadiness: 50,
         riskLevel: "Medium",
         strengths: ["Ish yangi ochildi", "Foydalanuvchi ma'lumotlarini kutmoqda"],
         weaknesses: ["Xavflarni tahlil qilish uchun AI diagnostikasini yangilang"],
@@ -737,7 +737,6 @@ export function Cases({ user }: { user?: any }) {
       // Parse response cleanly
       let payload: any = {
         proceduralReadiness: 55,
-        winningProbability: 55,
         evidenceStrength: "O'rta",
         missingInformation: [],
         riskLevel: "Medium",
@@ -757,11 +756,10 @@ export function Cases({ user }: { user?: any }) {
         console.warn("AI didn't output ideal JSON, using custom string adaptation");
       }
 
-      const readiness = payload.proceduralReadiness ?? payload.winningProbability ?? 50;
+      const readiness = payload.proceduralReadiness ?? 50;
 
       await updateDoc(doc(db, "cases", activeCaseId), {
         proceduralReadiness: readiness,
-        winningProbability: readiness,
         evidenceStrength: payload.evidenceStrength || "O'rta",
         missingInformation: Array.isArray(payload.missingInformation) ? payload.missingInformation : [],
         riskLevel: payload.riskLevel || "Medium",
@@ -875,7 +873,7 @@ export function Cases({ user }: { user?: any }) {
       }
       
       summaryText += `Diagnostika Hisobi:\n`;
-      summaryText += `  - Jarayonga tayyorgarlik darajasi: ${activeCase.proceduralReadiness || activeCase.winningProbability || 50}%\n`;
+      summaryText += `  - Jarayonga tayyorgarlik darajasi: ${activeCase.proceduralReadiness || 50}%\n`;
       summaryText += `  - Dalillar holati: ${activeCase.evidenceStrength || "O'rta"}\n`;
       summaryText += `  - Xavf-xatarlar darajasi: ${activeCase.riskLevel || "Medium"}\n\n`;
       
@@ -1336,12 +1334,12 @@ export function Cases({ user }: { user?: any }) {
                               strokeWidth="10"
                               fill="transparent"
                               strokeDasharray={376.8}
-                              strokeDashoffset={376.8 - (376.8 * (activeCase.proceduralReadiness || activeCase.winningProbability || 50)) / 100}
+                              strokeDashoffset={376.8 - (376.8 * (activeCase.proceduralReadiness || 50)) / 100}
                               className="transition-all duration-1000 ease-out"
                             />
                           </svg>
                           <div className="absolute inset-0 flex flex-col items-center justify-center">
-                            <span className="text-3xl font-black text-blue-600 dark:text-blue-400">{activeCase.proceduralReadiness || activeCase.winningProbability || 50}%</span>
+                            <span className="text-3xl font-black text-blue-600 dark:text-blue-400">{activeCase.proceduralReadiness || 50}%</span>
                             <span className="text-[10px] text-gray-400 dark:text-zinc-500 font-semibold mt-0.5">Tayyorgarlik</span>
                           </div>
                         </div>

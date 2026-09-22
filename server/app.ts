@@ -577,63 +577,32 @@ async function authenticateRequestUser(req: express.Request): Promise<string | n
  * Authoritative check if user has admin privileges.
  * Validates against environment ADMIN_TELEGRAM_IDS, JWT claims, and Firestore.
  */
-export async function isUserAdmin(userId: string, req?: express.Request): Promise<boolean> {
+export async function isUserAdmin(userId: string, _req?: express.Request): Promise<boolean> {
   if (!userId) return false;
 
-  const adminIds = (process.env.ADMIN_TELEGRAM_IDS || "")
+  const adminTelegramIds = (process.env.ADMIN_TELEGRAM_IDS || "")
     .split(",")
     .map(s => s.trim())
     .filter(Boolean);
 
-  let telegramIdStr = "";
+  const adminUids = (process.env.ADMIN_UIDS || "")
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  if (adminUids.includes(userId)) {
+    return true;
+  }
+
   if (userId.startsWith("tg_")) {
-    telegramIdStr = userId.replace("tg_", "");
-  }
-  if (telegramIdStr && adminIds.includes(telegramIdStr)) {
-    return true;
-  }
-
-  if (req) {
-    const rawAuth = (req.headers.authorization || req.headers.Authorization || "") as string;
-    const token = rawAuth.replace(/^Bearer\s+/i, "").trim();
-    if (token) {
-      const sessionResult = verifySessionToken(token);
-      if (sessionResult.valid && sessionResult.payload?.role === "admin") {
-        return true;
-      }
-      if (sessionResult.valid && sessionResult.payload?.telegramId && adminIds.includes(String(sessionResult.payload.telegramId))) {
-        return true;
-      }
-      if (admin.apps.length > 0 && firebaseAdminState.credentialMode === "service_account_cert") {
-        try {
-          const decoded = await admin.auth().verifyIdToken(token);
-          if (decoded?.role === "admin" || decoded?.admin === true) {
-            return true;
-          }
-          if (decoded?.email && (decoded.email === "arslonovazamat11@gmail.com" || decoded.email === "admin@dastyorchi.uz")) {
-            return true;
-          }
-        } catch {}
-      }
+    const telegramId = userId.slice(3);
+    if (adminTelegramIds.includes(telegramId)) {
+      return true;
     }
   }
 
-  if (dbAdmin) {
-    try {
-      const snap = await dbAdmin.collection("users").doc(userId).get();
-      if (snap.exists) {
-        const data = snap.data();
-        if (data?.role === "admin") return true;
-        if (data?.telegramId && adminIds.includes(String(data.telegramId))) return true;
-        if (data?.email && (data.email === "arslonovazamat11@gmail.com" || data.email === "admin@dastyorchi.uz")) return true;
-      }
-    } catch (err) {
-      console.error("[AdminCheck] Firestore check error:", err);
-    }
-  } else if (!isProductionEnvironment()) {
-    return true;
-  }
-
+  // Production admin authority is intentionally NOT derived from mutable
+  // Firestore profile fields, emails, or previously-issued role claims.
   return false;
 }
 
@@ -742,7 +711,11 @@ apiRouter.post("/auth/telegram", async (req, res) => {
       .split(",")
       .map(s => s.trim())
       .filter(Boolean);
-    const isEnvAdmin = adminIds.includes(String(telegramId));
+    const adminUids = (process.env.ADMIN_UIDS || "")
+      .split(",")
+      .map(s => s.trim())
+      .filter(Boolean);
+    const isEnvAdmin = adminIds.includes(String(telegramId)) || adminUids.includes(internalUserId);
 
     let userProfile: any = null;
     let firestoreStatus = "skipped (no dbAdmin)";
@@ -823,9 +796,10 @@ apiRouter.post("/auth/telegram", async (req, res) => {
         updatedFields.photoUrl = telegramUser.photo_url;
         updatedFields.avatarUrl = telegramUser.photo_url;
       }
-      if (isEnvAdmin && userProfile.role !== "admin") {
-        updatedFields.role = "admin";
-        userProfile.role = "admin";
+      const authoritativeRole = isEnvAdmin ? "admin" : "user";
+      if (userProfile.role !== authoritativeRole) {
+        updatedFields.role = authoritativeRole;
+        userProfile.role = authoritativeRole;
       }
 
       // Auto-migrate AI credits if missing
@@ -860,7 +834,7 @@ apiRouter.post("/auth/telegram", async (req, res) => {
     const token = createSessionToken({
       uid: internalUserId,
       telegramId,
-      role: userProfile.role || "user",
+      role: isEnvAdmin ? "admin" : "user",
       iat: Math.floor(Date.now() / 1000),
       exp: Math.floor(Date.now() / 1000) + (14 * 24 * 60 * 60)
     });
@@ -873,10 +847,9 @@ apiRouter.post("/auth/telegram", async (req, res) => {
       try {
         const customClaims: Record<string, any> = {
           telegramId,
-          role: userProfile.role || "user"
+          role: isEnvAdmin ? "admin" : "user"
         };
-        if (isEnvAdmin || userProfile.role === "admin") {
-          customClaims.role = "admin";
+        if (isEnvAdmin) {
           customClaims.admin = true;
         }
         firebaseCustomToken = await admin.auth().createCustomToken(internalUserId, customClaims);
@@ -900,7 +873,7 @@ apiRouter.post("/auth/telegram", async (req, res) => {
         lastName: userProfile.lastName,
         avatarUrl: userProfile.avatarUrl,
         photoUrl: userProfile.photoUrl,
-        role: userProfile.role,
+        role: isEnvAdmin ? "admin" : "user",
         subscriptionTier: userProfile.subscriptionTier,
         subscriptionStatus: userProfile.subscriptionStatus,
         createdAt: userProfile.createdAt,
@@ -1054,9 +1027,13 @@ apiRouter.get("/auth/session", async (req, res) => {
       };
     }
 
+    const authoritativeAdmin = await isUserAdmin(uid, req);
     return res.json({
       valid: true,
-      user: userProfile
+      user: {
+        ...userProfile,
+        role: authoritativeAdmin ? "admin" : "user"
+      }
     });
   } catch (err: any) {
     return res.status(500).json({ error: "Sessiyani tekshirishda xatolik yuz berdi" });
