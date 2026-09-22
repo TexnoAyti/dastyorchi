@@ -1,0 +1,156 @@
+         missingInformation: Array.isArray(payload.missingInformation) ? payload.missingInformation : [],
+         riskLevel: payload.riskLevel || "Medium",
+@@ -875,7 +873,7 @@
+       }
+       
+       summaryText += `Diagnostika Hisobi:\n`;
+-      summaryText += `  - Jarayonga tayyorgarlik darajasi: ${activeCase.proceduralReadiness || activeCase.winningProbability || 50}%\n`;
++      summaryText += `  - Jarayonga tayyorgarlik darajasi: ${activeCase.proceduralReadiness || 50}%\n`;
+       summaryText += `  - Dalillar holati: ${activeCase.evidenceStrength || "O'rta"}\n`;
+       summaryText += `  - Xavf-xatarlar darajasi: ${activeCase.riskLevel || "Medium"}\n\n`;
+       
+@@ -1336,12 +1334,12 @@
+                               strokeWidth="10"
+                               fill="transparent"
+                               strokeDasharray={376.8}
+-                              strokeDashoffset={376.8 - (376.8 * (activeCase.proceduralReadiness || activeCase.winningProbability || 50)) / 100}
++                              strokeDashoffset={376.8 - (376.8 * (activeCase.proceduralReadiness || 50)) / 100}
+                               className="transition-all duration-1000 ease-out"
+                             />
+                           </svg>
+                           <div className="absolute inset-0 flex flex-col items-center justify-center">
+-                            <span className="text-3xl font-black text-blue-600 dark:text-blue-400">{activeCase.proceduralReadiness || activeCase.winningProbability || 50}%</span>
++                            <span className="text-3xl font-black text-blue-600 dark:text-blue-400">{activeCase.proceduralReadiness || 50}%</span>
+                             <span className="text-[10px] text-gray-400 dark:text-zinc-500 font-semibold mt-0.5">Tayyorgarlik</span>
+                           </div>
+                         </div>
+diff -ruN dastyorchi_base/src/pages/Consultation.tsx dastyorchi_work/src/pages/Consultation.tsx
+--- dastyorchi_base/src/pages/Consultation.tsx	2026-09-22 13:16:56.000000000 +0000
++++ dastyorchi_work/src/pages/Consultation.tsx	2026-09-22 13:57:13.554192827 +0000
+@@ -62,7 +62,7 @@
+     saving: "Saqlanmoqda...",
+     save: "Saqlash",
+     cancel: "Bekor qilish",
+-    win_prob: "Tayyorgarlik darajasi",
++    readiness: "Tayyorgarlik darajasi",
+     risk_level: "Xavf darajasi",
+     strengths: "Kuchli taraflar",
+     weaknesses: "Zaif taraflar",
+@@ -150,7 +150,7 @@
+     saving: "Сақланмоқда...",
+     save: "Сақлаш",
+     cancel: "Бекор қилиш",
+-    win_prob: "Тайёргарлик даражаси",
++    readiness: "Тайёргарлик даражаси",
+     risk_level: "Хавф даражаси",
+     strengths: "Кучли тарафлар",
+     weaknesses: "Заиф тарафлар",
+@@ -238,7 +238,7 @@
+     saving: "Сохранение...",
+     save: "Сохранить",
+     cancel: "Отмена",
+-    win_prob: "Процессуальная готовность",
++    readiness: "Процессуальная готовность",
+     risk_level: "Уровень риска",
+     strengths: "Сильные стороны",
+     weaknesses: "Слабые стороны",
+@@ -326,7 +326,7 @@
+     saving: "Saving...",
+     save: "Save",
+     cancel: "Cancel",
+-    win_prob: "Win rate",
++    readiness: "Procedural Readiness",
+     risk_level: "Risk level",
+     strengths: "Strengths",
+     weaknesses: "Weaknesses",
+@@ -454,7 +454,7 @@
+   const [speechError, setSpeechError] = useState<string | null>(null);
+   const [documentContent, setDocumentContent] = useState<string>("");
+   const [analysis, setAnalysis] = useState({
+-    winningProbability: 0,
++    proceduralReadiness: 0,
+     riskLevel: "",
+     strengths: [] as string[],
+     weaknesses: [] as string[],
+@@ -462,7 +462,7 @@
+     strategy: "",
+     expertise: ""
+   });
+-  const [activePanel, setActivePanel] = useState<"none" | "winning" | "riskLevel" | "strengths" | "weaknesses" | "risk" | "strategy" | "expertise">("none");
++  const [activePanel, setActivePanel] = useState<"none" | "readiness" | "riskLevel" | "strengths" | "weaknesses" | "risk" | "strategy" | "expertise">("none");
+   
+   const [cases, setCases] = useState<Case[]>([]);
+   const [profiles, setProfiles] = useState<PersonProfile[]>([]);
+@@ -512,11 +512,11 @@
+       let htmlString = `<div style="font-family: sans-serif; padding: 20px;">`;
+       htmlString += `<h1 style="text-align: center; color: #1f2937; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px;">To'liq Yuridik Analiz</h1>`;
+       
+-      if (analysis.winningProbability !== undefined && analysis.winningProbability > 0) {
++      if (analysis.proceduralReadiness !== undefined && analysis.proceduralReadiness > 0) {
+         htmlString += `
+           <div style="margin-top: 20px; padding: 15px; background: #f0fdf4; border-radius: 8px;">
+             <h2 style="color: #166534; font-size: 18px; margin-bottom: 5px;">Jarayonga Tayyorgarlik Darajasi</h2>
+-            <p style="font-size: 24px; font-weight: bold; color: #15803d; margin: 0;">${analysis.winningProbability}%</p>
++            <p style="font-size: 24px; font-weight: bold; color: #15803d; margin: 0;">${analysis.proceduralReadiness}%</p>
+           </div>
+         `;
+       }
+@@ -989,7 +989,7 @@
+       }
+     ]);
+     setDocumentContent("");
+-    setAnalysis({ winningProbability: 0, riskLevel: "", strengths: [], weaknesses: [], risk: "", strategy: "", expertise: "" });
++    setAnalysis({ proceduralReadiness: 0, riskLevel: "", strengths: [], weaknesses: [], risk: "", strategy: "", expertise: "" });
+     chatInputRef.current?.clear();
+   };
+ 
+@@ -1011,7 +1011,7 @@
+     ]);
+     setDocumentContent("");
+     setAiMode("study");
+-    setAnalysis({ winningProbability: 0, riskLevel: "", strengths: [], weaknesses: [], risk: "", strategy: "", expertise: "" });
++    setAnalysis({ proceduralReadiness: 0, riskLevel: "", strengths: [], weaknesses: [], risk: "", strategy: "", expertise: "" });
+   };
+ 
+   const handleDocumentChange = async (newContent: string) => {
+@@ -1075,7 +1075,7 @@
+       if (chatDoc) setLastSavedDocument(chatDoc);
+     }
+     setAnalysis({
+-      winningProbability: chat.winningProbability || 0,
++      proceduralReadiness: chat.proceduralReadiness || 0,
+       riskLevel: chat.riskLevel || "",
+       strengths: chat.strengths || [],
+       weaknesses: chat.weaknesses || [],
+@@ -1207,7 +1207,7 @@
+         aiMode: params.aiMode
+       };
+       if (params.isDocument && params.response?.content) updateData.document = params.response.content;
+-      if (params.response?.analysis?.winningProbability != null) updateData.winningProbability = params.response.analysis.winningProbability;
++      if (params.response?.analysis?.proceduralReadiness != null) updateData.proceduralReadiness = params.response.analysis.proceduralReadiness;
+       if (params.response?.analysis?.riskLevel) updateData.riskLevel = params.response.analysis.riskLevel;
+       if (params.response?.analysis?.strengths) updateData.strengths = params.response.analysis.strengths;
+       if (params.response?.analysis?.weaknesses) updateData.weaknesses = params.response.analysis.weaknesses;
+@@ -1336,7 +1336,7 @@
+       }
+       
+       setAnalysis(prev => ({
+-        winningProbability: response?.analysis?.winningProbability ?? prev.winningProbability,
++        proceduralReadiness: response?.analysis?.proceduralReadiness ?? prev.proceduralReadiness,
+         riskLevel: response?.analysis?.riskLevel || prev.riskLevel,
+         strengths: response?.analysis?.strengths || prev.strengths,
+         weaknesses: response?.analysis?.weaknesses || prev.weaknesses,
+@@ -1358,7 +1358,7 @@
+       try {
+         if (isDocument) {
+           triggerNotification("document", language, { chatId: activeChatId || undefined });
+-        } else if (response?.analysis && (response.analysis.winningProbability != null || response.analysis.riskLevel)) {
++        } else if (response?.analysis && (response.analysis.proceduralReadiness != null || response.analysis.riskLevel)) {
+           triggerNotification("analysis", language, { chatId: activeChatId || undefined, analysisId: activeChatId || undefined });
+         } else {
+           triggerNotification("chat", language, { chatId: activeChatId || undefined });
+@@ -2167,31 +2167,31 @@
+         {/* Accordions */}
+         <div className="flex flex-col gap-3 shrink-0">
+           
+-          {/* Yutish Foizi */}
