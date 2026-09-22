@@ -4,6 +4,7 @@ import { Language } from "../types";
 import { extractRawText } from "mammoth";
 import * as pdfjsLib from "pdfjs-dist";
 import { safeStringToBase64Async } from "../utils/fileEncoding";
+import { useViewport } from "../contexts/ViewportContext";
 
 // Standardize PDF.js worker CDN for inline extraction
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
@@ -95,6 +96,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
   messagesLength,
   retryMessage
 }, ref) => {
+  const { keyboardHeight, isMobile } = useViewport();
   const [input, setInput] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessingFiles, setIsProcessingFiles] = useState(false);
@@ -113,7 +115,8 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
         textareaRef.current.value = val;
         // Adjust text area height
         textareaRef.current.style.height = "auto";
-        textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+        const newHeight = Math.min(Math.max(textareaRef.current.scrollHeight, 44), 140);
+        textareaRef.current.style.height = `${newHeight}px`;
       }
     },
     focus: () => {
@@ -129,7 +132,8 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
   const autoResize = () => {
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+      const newHeight = Math.min(Math.max(textareaRef.current.scrollHeight, 44), 140);
+      textareaRef.current.style.height = `${newHeight}px`;
     }
   };
 
@@ -378,7 +382,12 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
   };
 
   return (
-    <div className="p-3 sm:p-4 bg-white/30 backdrop-blur-md border-t border-white/40 relative w-full min-w-0">
+    <div
+      style={{
+        paddingBottom: keyboardHeight > 0 ? "8px" : (isMobile ? "max(12px, env(safe-area-inset-bottom, 12px))" : undefined)
+      }}
+      className="p-3 sm:p-4 bg-white/40 dark:bg-zinc-900/60 backdrop-blur-md border-t border-white/40 dark:border-zinc-800 relative w-full min-w-0 shrink-0"
+    >
       {speechError && (
         <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-red-500/90 text-white px-4 py-2 rounded-xl text-xs font-semibold shadow-xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2">
           {speechError}

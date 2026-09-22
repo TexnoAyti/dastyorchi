@@ -35,6 +35,10 @@ declare global {
         viewportStableHeight?: number;
         headerColor?: string;
         backgroundColor?: string;
+        setHeaderColor?: (color: string) => void;
+        setBackgroundColor?: (color: string) => void;
+        onEvent?: (eventType: string, eventHandler: () => void) => void;
+        offEvent?: (eventType: string, eventHandler: () => void) => void;
         enableClosingConfirmation?: () => void;
       };
     };

@@ -26,6 +26,7 @@ import { generateResearchReport, saveResearchReport, deleteResearchReport } from
 import { errorLogger } from "../services/errorLoggingService";
 import { getFriendlyErrorMessage } from "../utils/errorFriendly";
 import { useAuth } from "../contexts/AuthContext";
+import { ResponsiveModal } from "../components/common/ResponsivePrimitives";
 
 export function Cases({ user }: { user?: any }) {
   const authContext = useAuth();
@@ -2339,100 +2340,92 @@ export function Cases({ user }: { user?: any }) {
       </div>
 
       {/* 3. MODAL: Register New Dispute Case */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[110] p-4 modal-overlay-fallback">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl relative"
-          >
-            <h2 className="text-base font-extrabold text-gray-900 mb-6 flex items-center gap-2">
-              <Plus className="w-5 h-5 text-blue-600" />
-              Yangi huquqiy ish ochish
-            </h2>
-            
-            <form onSubmit={handleCreateCase} className="space-y-4 text-left">
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
-                  Ish sarlavhasi (Dispute Title) *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={formData.title}
-                  onChange={(e) => setFormData({...formData, title: e.target.value})}
-                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:bg-white text-xs font-semibold"
-                  placeholder="Masalan: Mehnat nizosi (Ish haqi nizosi)"
-                />
-              </div>
+      <ResponsiveModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        title="Yangi huquqiy ish ochish"
+        maxWidth="max-w-md"
+      >
+        <form onSubmit={handleCreateCase} className="space-y-4 text-left p-1">
+          <div>
+            <label className="block text-[10px] font-bold text-gray-500 dark:text-zinc-400 uppercase tracking-wider mb-1">
+              Ish sarlavhasi (Dispute Title) *
+            </label>
+            <input
+              type="text"
+              required
+              value={formData.title}
+              onChange={(e) => setFormData({...formData, title: e.target.value})}
+              className="w-full px-3.5 py-2.5 bg-gray-50 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-xs font-semibold text-gray-900 dark:text-zinc-100"
+              placeholder="Masalan: Mehnat nizosi (Ish haqi nizosi)"
+            />
+          </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
-                  Kategoriya (Category) *
-                </label>
-                <select
-                  required
-                  value={formData.category}
-                  onChange={(e) => setFormData({...formData, category: e.target.value})}
-                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:bg-white text-xs font-semibold cursor-pointer"
-                >
-                  <option value="">Tanlang...</option>
-                  <option value="Mehnat nizosi">Mehnat nizosi</option>
-                  <option value="Oila huquqi">Oila huquqi</option>
-                  <option value="Fuqarolik huquqi">Fuqarolik huquqi</option>
-                  <option value="Ma'muriy nizo">Ma'muriy nizo</option>
-                  <option value="Jinoyat huquqi">Jinoyat ishi</option>
-                  <option value="Mulk huquqi">Mulk va uy-joy</option>
-                  <option value="Boshqa">Boshqa masalalar</option>
-                </select>
-              </div>
+          <div>
+            <label className="block text-[10px] font-bold text-gray-500 dark:text-zinc-400 uppercase tracking-wider mb-1">
+              Kategoriya (Category) *
+            </label>
+            <select
+              required
+              value={formData.category}
+              onChange={(e) => setFormData({...formData, category: e.target.value})}
+              className="w-full px-3.5 py-2.5 bg-gray-50 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-xs font-semibold text-gray-900 dark:text-zinc-100 cursor-pointer"
+            >
+              <option value="">Tanlang...</option>
+              <option value="Mehnat nizosi">Mehnat nizosi</option>
+              <option value="Oila huquqi">Oila huquqi</option>
+              <option value="Fuqarolik huquqi">Fuqarolik huquqi</option>
+              <option value="Ma'muriy nizo">Ma'muriy nizo</option>
+              <option value="Jinoyat huquqi">Jinoyat ishi</option>
+              <option value="Mulk huquqi">Mulk va uy-joy</option>
+              <option value="Boshqa">Boshqa masalalar</option>
+            </select>
+          </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
-                    Hudud (Region)
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.region}
-                    onChange={(e) => setFormData({...formData, region: e.target.value})}
-                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-xs font-semibold"
-                    placeholder="Toshkent sh."
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
-                    Sud idorasi (Court)
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.courtType}
-                    onChange={(e) => setFormData({...formData, courtType: e.target.value})}
-                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-xs font-semibold"
-                    placeholder="Fuqarolik sudi"
-                  />
-                </div>
-              </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="block text-[10px] font-bold text-gray-500 dark:text-zinc-400 uppercase tracking-wider mb-1">
+                Hudud (Region)
+              </label>
+              <input
+                type="text"
+                value={formData.region}
+                onChange={(e) => setFormData({...formData, region: e.target.value})}
+                className="w-full px-3 py-2.5 bg-gray-50 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-xs font-semibold text-gray-900 dark:text-zinc-100"
+                placeholder="Toshkent sh."
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-gray-500 dark:text-zinc-400 uppercase tracking-wider mb-1">
+                Sud idorasi (Court)
+              </label>
+              <input
+                type="text"
+                value={formData.courtType}
+                onChange={(e) => setFormData({...formData, courtType: e.target.value})}
+                className="w-full px-3 py-2.5 bg-gray-50 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-xs font-semibold text-gray-900 dark:text-zinc-100"
+                placeholder="Fuqarolik sudi"
+              />
+            </div>
+          </div>
 
-              <div className="flex gap-3 pt-4">
-                <button
-                  type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="flex-1 px-4 py-2.5 bg-gray-100 text-gray-600 rounded-xl text-xs font-bold hover:bg-gray-200 transition"
-                >
-                  Bekor qilish
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition shadow-md"
-                >
-                  Ishni yaratish
-                </button>
-              </div>
-            </form>
-          </motion.div>
-        </div>
-      )}
+          <div className="flex gap-3 pt-4">
+            <button
+              type="button"
+              onClick={() => setIsModalOpen(false)}
+              className="flex-1 px-4 py-2.5 bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-zinc-300 rounded-xl text-xs font-bold hover:bg-gray-200 dark:hover:bg-zinc-700 transition min-h-[44px]"
+            >
+              Bekor qilish
+            </button>
+            <button
+              type="submit"
+              className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition shadow-md min-h-[44px]"
+            >
+              Ishni yaratish
+            </button>
+          </div>
+        </form>
+      </ResponsiveModal>
 
       {/* 4. TEMPLATE SELECTOR: Open document flow integrated with active caseId query */}
       {activeCase && (

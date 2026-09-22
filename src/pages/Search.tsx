@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { db } from "../firebase";
+import { db, auth } from "../firebase";
 import { collection, query, where, onSnapshot, getDocs } from "firebase/firestore";
 import { handleFirestoreError, OperationType } from "../lib/firestore-error";
 import { 

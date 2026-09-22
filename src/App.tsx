@@ -1,7 +1,7 @@
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
-import { Navbar } from "./components/Navbar";
-import { MobileBottomDock } from "./components/MobileBottomDock";
+import { AppShell } from "./components/layout/AppShell";
+import { ViewportProvider } from "./contexts/ViewportContext";
 import { TelegramBrowserFallback } from "./components/TelegramBrowserFallback";
 import { Dashboard } from "./pages/Dashboard";
 import { CalendarPage } from "./pages/CalendarPage";
@@ -130,14 +130,9 @@ function AppContent({ user, onLogout, onDevLogin, devLoading, authError, isNotMi
   );
 
   return (
-    <div className="min-h-[100dvh] h-[100dvh] w-full max-w-full flex flex-col bg-gray-50 dark:bg-zinc-950 overflow-hidden relative">
-      <Navbar user={user}>
-        {routesElement}
-        {offlineBanner}
-      </Navbar>
-      {/* Liquid Glass Mobile Bottom Dock */}
-      <MobileBottomDock user={user} onLogout={onLogout} />
-    </div>
+    <AppShell user={user} onLogout={onLogout} offlineBanner={offlineBanner}>
+      {routesElement}
+    </AppShell>
   );
 }
 
@@ -386,22 +381,24 @@ export default function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider>
-        <NotificationProvider>
-          <PaywallProvider>
-            <AuthProvider currentUser={user}>
-              <Router>
-                <AppContent 
-                  user={user} 
-                  onLogout={handleLogout}
-                  onDevLogin={handleDevLogin}
-                  devLoading={devLoading}
-                  authError={authError}
-                  isNotMiniApp={isNotMiniApp}
-                />
-              </Router>
-            </AuthProvider>
-          </PaywallProvider>
-        </NotificationProvider>
+        <ViewportProvider>
+          <NotificationProvider>
+            <PaywallProvider>
+              <AuthProvider currentUser={user}>
+                <Router>
+                  <AppContent 
+                    user={user} 
+                    onLogout={handleLogout}
+                    onDevLogin={handleDevLogin}
+                    devLoading={devLoading}
+                    authError={authError}
+                    isNotMiniApp={isNotMiniApp}
+                  />
+                </Router>
+              </AuthProvider>
+            </PaywallProvider>
+          </NotificationProvider>
+        </ViewportProvider>
       </ThemeProvider>
     </ErrorBoundary>
   );

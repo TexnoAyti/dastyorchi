@@ -7,6 +7,8 @@ import {
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { useTheme } from "../contexts/ThemeContext";
+import { useViewport } from "../contexts/ViewportContext";
+import { useNotification } from "../contexts/NotificationContext";
 
 interface MobileBottomDockProps {
   user: any;
@@ -17,6 +19,8 @@ export function MobileBottomDock({ user, onLogout }: MobileBottomDockProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
+  const { hideBottomDock } = useViewport();
+  const { unreadCount } = useNotification();
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
 
   // Check if current user is admin
@@ -71,11 +75,12 @@ export function MobileBottomDock({ user, onLogout }: MobileBottomDockProps) {
       {/* 1. EXPANDABLE "MORE" BOTTOM SHEET */}
       {moreMenuOpen && (
         <div 
-          className="lg:hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex flex-col justify-end animate-in fade-in duration-200"
+          className="lg:hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex flex-col justify-end animate-in fade-in duration-200"
           onClick={() => setMoreMenuOpen(false)}
         >
           <div 
             style={{
+              paddingBottom: "max(20px, env(safe-area-inset-bottom, 20px))",
               backdropFilter: "blur(28px)",
               WebkitBackdropFilter: "blur(28px)",
             }}
@@ -138,23 +143,23 @@ export function MobileBottomDock({ user, onLogout }: MobileBottomDockProps) {
                 className="flex items-center gap-2.5 min-w-0 p-1 rounded-xl hover:bg-gray-100 dark:hover:bg-white/5 transition-all"
               >
                 {user?.avatarUrl || user?.photoUrl ? (
-                  <img
-                    src={user.avatarUrl || user.photoUrl}
-                    alt={user.displayName || "Profil"}
-                    className="w-9 h-9 rounded-full object-cover border border-gray-200 dark:border-zinc-700 shrink-0"
+                  <img 
+                    src={user.avatarUrl || user.photoUrl} 
+                    alt={user.displayName || "User"} 
+                    className="w-8 h-8 rounded-full object-cover border border-white/40 dark:border-white/20 shrink-0" 
                     referrerPolicy="no-referrer"
                   />
                 ) : (
-                  <div className="w-9 h-9 rounded-full bg-blue-100 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 flex items-center justify-center font-bold text-xs shrink-0">
-                    <User className="w-4 h-4" />
+                  <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shrink-0">
+                    {(user?.displayName || "D")[0].toUpperCase()}
                   </div>
                 )}
-                <div className="min-w-0">
-                  <span className="block font-bold text-xs text-gray-900 dark:text-white truncate">
-                    {user?.displayName || [user?.firstName, user?.lastName].filter(Boolean).join(" ") || "Foydalanuvchi"}
+                <div className="min-w-0 text-left">
+                  <span className="font-bold text-xs text-gray-900 dark:text-white block truncate leading-tight">
+                    {user?.displayName || "Foydalanuvchi"}
                   </span>
-                  <span className="block text-[10px] text-gray-500 dark:text-zinc-400 truncate">
-                    {user?.username ? `@${user.username}` : (user?.telegramId ? `ID: ${user.telegramId}` : "Telegram profil")}
+                  <span className="text-[10px] text-gray-500 dark:text-zinc-400 block truncate">
+                    {user?.telegramUsername ? `@${user.telegramUsername}` : "Sozlamalar"}
                   </span>
                 </div>
               </Link>
@@ -163,15 +168,15 @@ export function MobileBottomDock({ user, onLogout }: MobileBottomDockProps) {
                 <button
                   type="button"
                   onClick={toggleTheme}
-                  className="p-2.5 text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-xl transition-all border border-gray-200/50 dark:border-white/10 cursor-pointer"
-                  title="Mavzu"
+                  className="p-2 rounded-xl text-gray-500 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
+                  title="Mavzuni almashtirish"
                 >
-                  {theme === "light" ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4 text-amber-400" />}
+                  {theme === "dark" ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-zinc-700" />}
                 </button>
                 <button
                   type="button"
                   onClick={handleLogout}
-                  className="p-2.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-xl transition-all border border-red-200/50 dark:border-red-900/30 cursor-pointer"
+                  className="p-2 rounded-xl text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors"
                   title="Chiqish"
                 >
                   <LogOut className="w-4 h-4" />
@@ -182,11 +187,14 @@ export function MobileBottomDock({ user, onLogout }: MobileBottomDockProps) {
         </div>
       )}
 
-      {/* 2. LIQUID GLASS FLOATING MOBILE BOTTOM DOCK */}
+      {/* 2. FLOATING MOBILE BOTTOM DOCK (Auto-hidden when keyboard or mobile editor is active) */}
       <div 
-        className="lg:hidden fixed left-0 right-0 z-40 flex justify-center pointer-events-none px-3 sm:px-4"
+        className={cn(
+          "lg:hidden fixed left-0 right-0 z-40 flex justify-center pointer-events-none px-3 sm:px-4 transition-all duration-300 ease-out",
+          hideBottomDock ? "translate-y-24 opacity-0 pointer-events-none" : "translate-y-0 opacity-100"
+        )}
         style={{
-          bottom: "max(12px, env(safe-area-inset-bottom, 12px))"
+          bottom: "max(10px, env(safe-area-inset-bottom, 10px))"
         }}
       >
         <nav 
@@ -194,7 +202,7 @@ export function MobileBottomDock({ user, onLogout }: MobileBottomDockProps) {
             backdropFilter: "blur(20px)",
             WebkitBackdropFilter: "blur(20px)",
           }}
-          className="pointer-events-auto w-full max-w-md bg-white/65 dark:bg-[#141418]/65 border border-white/60 dark:border-white/10 rounded-[26px] shadow-[0_8px_32px_rgba(0,0,0,0.12),0_2px_8px_rgba(0,0,0,0.06)] p-1.5 transition-all select-none"
+          className="pointer-events-auto w-full max-w-md bg-white/80 dark:bg-[#141418]/85 border border-white/60 dark:border-white/10 rounded-[26px] shadow-[0_8px_32px_rgba(0,0,0,0.12),0_2px_8px_rgba(0,0,0,0.06)] p-1.5 transition-all select-none"
         >
           <div className="grid grid-cols-5 items-center gap-1">
             {/* 1. Chat */}
@@ -203,7 +211,7 @@ export function MobileBottomDock({ user, onLogout }: MobileBottomDockProps) {
               className={cn(
                 "flex flex-col items-center justify-center min-h-[44px] py-1 px-0.5 rounded-[20px] transition-all duration-200 relative",
                 isChatActive
-                  ? "bg-white/90 dark:bg-white/15 text-blue-600 dark:text-blue-400 font-bold scale-[1.02] shadow-xs"
+                  ? "bg-white/95 dark:bg-white/15 text-blue-600 dark:text-blue-400 font-bold scale-[1.02] shadow-xs"
                   : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200 hover:bg-white/40 dark:hover:bg-white/5"
               )}
             >
@@ -218,7 +226,7 @@ export function MobileBottomDock({ user, onLogout }: MobileBottomDockProps) {
               className={cn(
                 "flex flex-col items-center justify-center min-h-[44px] py-1 px-0.5 rounded-[20px] transition-all duration-200 relative",
                 isCasesActive
-                  ? "bg-white/90 dark:bg-white/15 text-blue-600 dark:text-blue-400 font-bold scale-[1.02] shadow-xs"
+                  ? "bg-white/95 dark:bg-white/15 text-blue-600 dark:text-blue-400 font-bold scale-[1.02] shadow-xs"
                   : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200 hover:bg-white/40 dark:hover:bg-white/5"
               )}
             >
@@ -233,7 +241,7 @@ export function MobileBottomDock({ user, onLogout }: MobileBottomDockProps) {
               className={cn(
                 "flex flex-col items-center justify-center min-h-[44px] py-1 px-0.5 rounded-[20px] transition-all duration-200 relative",
                 isDocumentsActive
-                  ? "bg-white/90 dark:bg-white/15 text-blue-600 dark:text-blue-400 font-bold scale-[1.02] shadow-xs"
+                  ? "bg-white/95 dark:bg-white/15 text-blue-600 dark:text-blue-400 font-bold scale-[1.02] shadow-xs"
                   : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200 hover:bg-white/40 dark:hover:bg-white/5"
               )}
             >
@@ -248,7 +256,7 @@ export function MobileBottomDock({ user, onLogout }: MobileBottomDockProps) {
               className={cn(
                 "flex flex-col items-center justify-center min-h-[44px] py-1 px-0.5 rounded-[20px] transition-all duration-200 relative",
                 isSearchActive
-                  ? "bg-white/90 dark:bg-white/15 text-blue-600 dark:text-blue-400 font-bold scale-[1.02] shadow-xs"
+                  ? "bg-white/95 dark:bg-white/15 text-blue-600 dark:text-blue-400 font-bold scale-[1.02] shadow-xs"
                   : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200 hover:bg-white/40 dark:hover:bg-white/5"
               )}
             >
@@ -264,11 +272,16 @@ export function MobileBottomDock({ user, onLogout }: MobileBottomDockProps) {
               className={cn(
                 "flex flex-col items-center justify-center min-h-[44px] py-1 px-0.5 rounded-[20px] transition-all duration-200 relative cursor-pointer",
                 isMoreActive
-                  ? "bg-white/90 dark:bg-white/15 text-blue-600 dark:text-blue-400 font-bold scale-[1.02] shadow-xs"
+                  ? "bg-white/95 dark:bg-white/15 text-blue-600 dark:text-blue-400 font-bold scale-[1.02] shadow-xs"
                   : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-200 hover:bg-white/40 dark:hover:bg-white/5"
               )}
             >
-              <LayoutGrid className={cn("w-[18px] h-[18px] shrink-0 transition-transform", isMoreActive ? "stroke-[2.25]" : "stroke-[1.75]")} />
+              <div className="relative">
+                <LayoutGrid className={cn("w-[18px] h-[18px] shrink-0 transition-transform", isMoreActive ? "stroke-[2.25]" : "stroke-[1.75]")} />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full ring-2 ring-white dark:ring-zinc-900 animate-pulse" />
+                )}
+              </div>
               <span className="text-[10px] mt-0.5 leading-none tracking-tight font-medium">Yana</span>
               {isMoreActive && <span className="w-1 h-1 rounded-full bg-blue-600 dark:bg-blue-400 mt-0.5" />}
             </button>

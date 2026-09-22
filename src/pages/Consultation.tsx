@@ -25,6 +25,8 @@ import { performanceTracker } from "../utils/performanceTracker";
 import { errorLogger } from "../services/errorLoggingService";
 import { getFriendlyErrorMessage } from "../utils/errorFriendly";
 import { useLanguage } from "../contexts/LanguageContext";
+import { useViewport } from "../contexts/ViewportContext";
+import { ResponsiveModal } from "../components/common/ResponsivePrimitives";
 
 const LOCAL_TRANSLATIONS: Record<string, Record<string, string>> = {
   uz_lat: {
@@ -710,7 +712,20 @@ export function Consultation({ user }: { user: any }) {
   const [isPrivateMode, setIsPrivateMode] = useState(false);
   const [isBusinessMode, setIsBusinessMode] = useState(false);
   const [aiMode, setAiMode] = useState<"study" | "document">("study");
-  const [editorOpen, setEditorOpen] = useState(true);
+  const { isMobile, setIsFullScreenEditorOpen } = useViewport();
+  const [editorOpen, setEditorOpen] = useState(() => {
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      return false;
+    }
+    return true;
+  });
+
+  useEffect(() => {
+    setIsFullScreenEditorOpen(isMobile && editorOpen);
+    return () => {
+      setIsFullScreenEditorOpen(false);
+    };
+  }, [isMobile, editorOpen, setIsFullScreenEditorOpen]);
 
   // Separate states for study and document modes to prevent state sharing
   const [studyModeState, setStudyModeState] = useState<{
@@ -725,7 +740,7 @@ export function Consultation({ user }: { user: any }) {
     editorOpen: boolean;
     activeDocument: string | null;
   }>({
-    editorOpen: true,
+    editorOpen: typeof window !== "undefined" && window.innerWidth >= 1024,
     activeDocument: null,
   });
 
@@ -2079,10 +2094,37 @@ export function Consultation({ user }: { user: any }) {
         />
       </div>
 
-        {/* Right Panel: Editor / Risk Analyzer */}
-        {aiMode === "document" && editorOpen && (
+        {/* Mobile Fullscreen Document Editor */}
+        {isMobile && editorOpen && (
+          <div className="fixed inset-0 z-50 bg-white dark:bg-zinc-950 flex flex-col animate-in fade-in duration-200">
+            <DocumentEditor 
+              content={documentContent || ""} 
+              onChange={handleDocumentChange} 
+              title={chatSessions.find(s => s.id === currentChatId)?.title || "Hujjat"}
+              userRequest={messages.find(m => m.role === "user")?.content || ""}
+              onBack={() => setEditorOpen(false)}
+              saveStatus="saved"
+            />
+          </div>
+        )}
+
+        {/* Floating Quick Action to return to Document on Mobile */}
+        {isMobile && !editorOpen && documentContent && (
+          <button
+            type="button"
+            onClick={() => setEditorOpen(true)}
+            style={{ bottom: "calc(env(safe-area-inset-bottom, 12px) + 72px)" }}
+            className="fixed right-4 z-30 flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-xl border border-blue-400/40 font-bold text-xs active:scale-95 cursor-pointer transition-all animate-in fade-in slide-in-from-bottom-2"
+          >
+            <FileText className="w-4 h-4" />
+            <span>Hujjatga qaytish</span>
+          </button>
+        )}
+
+        {/* Right Panel: Editor / Risk Analyzer (Desktop only) */}
+        {!isMobile && aiMode === "document" && editorOpen && (
           <div 
-            className="w-full h-full fixed inset-0 z-50 bg-[#f8fafc]/98 lg:relative lg:inset-auto lg:z-30 lg:w-[60%] lg:flex-1 flex flex-col bg-white/40 backdrop-blur-[24px] lg:rounded-[32px] border border-white/50 shadow-[0_8px_40px_rgba(0,0,0,0.04)] overflow-y-auto glass-scrollbar min-h-0 p-4 sm:p-6 lg:p-8 transition-all duration-300 animate-in fade-in slide-in-from-right-5"
+            className="w-full h-full lg:relative lg:inset-auto lg:z-30 lg:w-[60%] lg:flex-1 flex flex-col bg-white/40 backdrop-blur-[24px] lg:rounded-[32px] border border-white/50 shadow-[0_8px_40px_rgba(0,0,0,0.04)] overflow-y-auto glass-scrollbar min-h-0 p-4 sm:p-6 lg:p-8 transition-all duration-300 animate-in fade-in slide-in-from-right-5"
             style={{ minHeight: "600px", display: "flex", flexDirection: "column", visibility: "visible", opacity: 1 }}
           >
             {/* Top bar */}
@@ -2391,89 +2433,83 @@ export function Consultation({ user }: { user: any }) {
       </div> {/* Closing wrapping container */}
 
       {/* Document Settings Modal */}
-      {isDocModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 modal-overlay-fallback">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl shadow-xl-fallback">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold text-gray-900">{lt.doc_settings_title}</h2>
-              <button onClick={() => setIsDocModalOpen(false)} className="text-gray-400 hover:text-gray-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            
-            <div className="space-y-6">
-              {/* Case Selection */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">{lt.which_case}</label>
-                <select
-                  value={selectedCaseId}
-                  onChange={(e) => setSelectedCaseId(e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
-                >
-                  <option value="">{lt.select_placeholder}</option>
-                  {cases.map(c => (
-                    <option key={c.id} value={c.id}>{c.title}</option>
-                  ))}
-                </select>
-              </div>
+      <ResponsiveModal
+        isOpen={isDocModalOpen}
+        onClose={() => setIsDocModalOpen(false)}
+        title={lt.doc_settings_title}
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-5 p-1">
+          {/* Case Selection */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 dark:text-zinc-300 mb-1.5">{lt.which_case}</label>
+            <select
+              value={selectedCaseId}
+              onChange={(e) => setSelectedCaseId(e.target.value)}
+              className="w-full px-3.5 py-2.5 bg-gray-50 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-xs font-medium text-gray-900 dark:text-zinc-100"
+            >
+              <option value="">{lt.select_placeholder}</option>
+              {cases.map(c => (
+                <option key={c.id} value={c.id}>{c.title}</option>
+              ))}
+            </select>
+          </div>
 
-              {/* Profiles Selection */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">{lt.involved_persons}</label>
-                <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
-                  {profiles.length === 0 ? (
-                    <p className="text-sm text-gray-500 italic">{lt.no_profiles_found}</p>
-                  ) : (
-                    profiles.map(p => (
-                      <label key={p.id} className="flex items-center gap-3 p-3 border border-gray-200 rounded-xl hover:bg-gray-50 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={selectedProfileIds.includes(p.id)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedProfileIds([...selectedProfileIds, p.id]);
-                            } else {
-                              setSelectedProfileIds(selectedProfileIds.filter(id => id !== p.id));
-                            }
-                          }}
-                          className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                        />
-                        <div className="flex flex-col">
-                          <span className="text-sm font-medium text-gray-900">{p.fullName}</span>
-                          {p.passport && <span className="text-xs text-gray-500">{p.passport}</span>}
-                        </div>
-                      </label>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              <button
-                onClick={handleGenerateDocument}
-                disabled={isGeneratingDoc}
-                className="w-full py-3 bg-blue-600 text-white font-medium rounded-xl hover:bg-blue-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2 flex-col"
-              >
-                <div className="flex items-center justify-center gap-2">
-                  {isGeneratingDoc ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      {lt.creating_btn}
-                    </>
-                  ) : (
-                    <>
-                      <FileText className="w-5 h-5" />
-                      {lt.confirm_create_btn}
-                    </>
-                  )}
-                </div>
-                {isGeneratingDoc && retryMessage && (
-                  <span className="text-xs text-blue-200 mt-1 animate-pulse whitespace-pre-wrap px-2 text-center">{retryMessage}</span>
-                )}
-              </button>
+          {/* Profiles Selection */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 dark:text-zinc-300 mb-1.5">{lt.involved_persons}</label>
+            <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1 glass-scrollbar">
+              {profiles.length === 0 ? (
+                <p className="text-xs text-gray-500 italic py-2">{lt.no_profiles_found}</p>
+              ) : (
+                profiles.map(p => (
+                  <label key={p.id} className="flex items-center gap-2.5 p-2.5 border border-gray-200/80 dark:border-zinc-800 rounded-xl hover:bg-gray-50 dark:hover:bg-zinc-800/50 cursor-pointer transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={selectedProfileIds.includes(p.id)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedProfileIds([...selectedProfileIds, p.id]);
+                        } else {
+                          setSelectedProfileIds(selectedProfileIds.filter(id => id !== p.id));
+                        }
+                      }}
+                      className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                    />
+                    <div className="flex flex-col min-w-0">
+                      <span className="text-xs font-medium text-gray-900 dark:text-zinc-100 truncate">{p.fullName}</span>
+                      {p.passport && <span className="text-[10px] text-gray-500 dark:text-zinc-400">{p.passport}</span>}
+                    </div>
+                  </label>
+                ))
+              )}
             </div>
           </div>
+
+          <button
+            onClick={handleGenerateDocument}
+            disabled={isGeneratingDoc}
+            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-all disabled:opacity-50 flex items-center justify-center gap-2 flex-col cursor-pointer shadow-md min-h-[44px]"
+          >
+            <div className="flex items-center justify-center gap-2">
+              {isGeneratingDoc ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  {lt.creating_btn}
+                </>
+              ) : (
+                <>
+                  <FileText className="w-4 h-4" />
+                  {lt.confirm_create_btn}
+                </>
+              )}
+            </div>
+            {isGeneratingDoc && retryMessage && (
+              <span className="text-[10px] text-blue-200 mt-0.5 animate-pulse whitespace-pre-wrap px-2 text-center">{retryMessage}</span>
+            )}
+          </button>
         </div>
-      )}
+      </ResponsiveModal>
     </div>
   </div>
   );

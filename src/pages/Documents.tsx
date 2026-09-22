@@ -9,7 +9,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { DOCUMENT_TEMPLATES } from "../constants";
 import { cn } from "@/src/lib/utils";
-import { db } from "../firebase";
+import { db, auth } from "../firebase";
 import {
   collection, query, where, orderBy, onSnapshot, deleteDoc, doc,
   limit, updateDoc, addDoc, getDocs
@@ -18,6 +18,7 @@ import { TemplateSelector } from "../components/TemplateSelector";
 import { handleFirestoreError, OperationType } from "../lib/firestore-error";
 import { logActivity } from "../services/activityService";
 import { useAuth } from "../contexts/AuthContext";
+import { ResponsiveModal } from "../components/common/ResponsivePrimitives";
 
 // Category Constants
 export const LEGAL_CATEGORIES = [
@@ -841,108 +842,77 @@ export function DocumentsPage({ user }: { user?: any }) {
       </div>
 
       {/* Editor Modal Dialog */}
-      <AnimatePresence>
-        {editingDoc && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setEditingDoc(null)}
-              className="absolute inset-0 bg-slate-900/40 backdrop-blur-xs cursor-pointer"
+      <ResponsiveModal
+        isOpen={!!editingDoc}
+        onClose={() => setEditingDoc(null)}
+        title="Hujjat sozlamalari"
+        maxWidth="max-w-lg"
+      >
+        <div className="space-y-4 p-1">
+          {/* Title */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider block">Hujjat nomi</label>
+            <input
+              type="text"
+              value={editTitle}
+              onChange={(e) => setEditTitle(e.target.value)}
+              placeholder="Hujjat nomi..."
+              maxLength={120}
+              className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-xl text-xs"
             />
-
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-lg shadow-xl overflow-hidden relative z-10"
-            >
-              <div className="px-6 py-4.5 border-b border-slate-100 dark:border-zinc-800 flex items-center justify-between bg-slate-50/50 dark:bg-zinc-950/20">
-                <div className="flex items-center gap-2">
-                  <Edit3 className="w-4.5 h-4.5 text-blue-600 dark:text-blue-400" />
-                  <span className="font-extrabold text-slate-800 dark:text-zinc-200 text-xs uppercase tracking-wider">Hujjat sozlamalari</span>
-                </div>
-                <button
-                  onClick={() => setEditingDoc(null)}
-                  className="p-1 px-2.5 rounded-full hover:bg-slate-200 dark:hover:bg-zinc-800 text-slate-400 dark:text-zinc-500 font-bold text-xs"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="p-6 space-y-4">
-                
-                {/* Title */}
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider block">Hujjat nomi</label>
-                  <input
-                    type="text"
-                    value={editTitle}
-                    onChange={(e) => setEditTitle(e.target.value)}
-                    placeholder="Hujjat nomi..."
-                    maxLength={120}
-                    className="w-full px-4 py-2.5 border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-xl text-xs"
-                  />
-                </div>
-
-                {/* Categories */}
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider block">Kategoriya</label>
-                  <select
-                    value={editCategory}
-                    onChange={(e) => setEditCategory(e.target.value)}
-                    className="w-full px-4 py-2.5 border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-xl text-xs cursor-pointer"
-                  >
-                    {LEGAL_CATEGORIES.map(category => (
-                      <option key={category} value={category} className="bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
-                        {category}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Association to Case Link */}
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider block">Ish papkasiga biriktirish (Legal Case)</label>
-                  <select
-                    value={editCaseId}
-                    onChange={(e) => setEditCaseId(e.target.value)}
-                    className="w-full px-4 py-2.5 border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-xl text-xs cursor-pointer"
-                  >
-                    <option value="" className="bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">-- Biriktirilmagan (Mustaqil) --</option>
-                    {cases.map((c) => (
-                      <option key={c.id} value={c.id} className="bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
-                        {c.title} ({c.category || "Umumiy"})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-              </div>
-
-              <div className="px-6 py-4 border-t border-slate-100 dark:border-zinc-800 flex items-center justify-end gap-2.5 bg-slate-50/50 dark:bg-zinc-950/20">
-                <button
-                  type="button"
-                  onClick={() => setEditingDoc(null)}
-                  className="px-4 py-2 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-semibold text-slate-500 dark:text-zinc-400 bg-white dark:bg-zinc-900 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-all cursor-pointer"
-                >
-                  Bekor qilish
-                </button>
-                <button
-                  type="button"
-                  onClick={handleRenameSave}
-                  className="px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 transition-all shadow-xs cursor-pointer"
-                >
-                  Saqlash
-                </button>
-              </div>
-
-            </motion.div>
           </div>
-        )}
-      </AnimatePresence>
+
+          {/* Categories */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider block">Kategoriya</label>
+            <select
+              value={editCategory}
+              onChange={(e) => setEditCategory(e.target.value)}
+              className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-xl text-xs cursor-pointer"
+            >
+              {LEGAL_CATEGORIES.map(category => (
+                <option key={category} value={category} className="bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
+                  {category}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Association to Case Link */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider block">Ish papkasiga biriktirish (Legal Case)</label>
+            <select
+              value={editCaseId}
+              onChange={(e) => setEditCaseId(e.target.value)}
+              className="w-full px-3.5 py-2.5 border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-xl text-xs cursor-pointer"
+            >
+              <option value="" className="bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">-- Biriktirilmagan (Mustaqil) --</option>
+              {cases.map((c) => (
+                <option key={c.id} value={c.id} className="bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
+                  {c.title} ({c.category || "Umumiy"})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center justify-end gap-2.5 pt-4">
+            <button
+              type="button"
+              onClick={() => setEditingDoc(null)}
+              className="px-4 py-2.5 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-semibold text-slate-500 dark:text-zinc-400 bg-white dark:bg-zinc-900 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-all cursor-pointer min-h-[44px]"
+            >
+              Bekor qilish
+            </button>
+            <button
+              type="button"
+              onClick={handleRenameSave}
+              className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 transition-all shadow-xs cursor-pointer min-h-[44px]"
+            >
+              Saqlash
+            </button>
+          </div>
+        </div>
+      </ResponsiveModal>
 
     </div>
   );
