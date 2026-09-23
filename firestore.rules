@@ -26,6 +26,7 @@ service cloud.firestore {
         (
           request.auth.uid == userId &&
           request.resource.data.get('role', 'user') == 'user' &&
+          request.resource.data.get('admin', false) == false &&
           request.resource.data.get('subscriptionTier', 'free') == 'free' &&
           request.resource.data.get('subscriptionStatus', 'active') == 'active' &&
           request.resource.data.get('aiCreditsDailyLimit', 10) <= 10 &&
@@ -59,7 +60,10 @@ service cloud.firestore {
     match /chats/{chatId} {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (resource.data.userId == request.auth.uid && request.resource.data.userId == resource.data.userId)
+      );
 
       match /messages/{messageId} {
         allow create: if isSignedIn() && (
@@ -81,7 +85,10 @@ service cloud.firestore {
     match /cases/{caseId} {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (resource.data.userId == request.auth.uid && request.resource.data.userId == resource.data.userId)
+      );
 
       match /{allSubcollections=**} {
         allow read, write: if isSignedIn() && (
@@ -94,26 +101,38 @@ service cloud.firestore {
     match /profiles/{profileId} {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (resource.data.userId == request.auth.uid && request.resource.data.userId == resource.data.userId)
+      );
     }
 
     // 5. Generated Legal Documents
     match /documents/{docId} {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (resource.data.userId == request.auth.uid && request.resource.data.userId == resource.data.userId)
+      );
     }
 
     // 6. Archived Documents & Chats
     match /archived_documents/{docId} {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (resource.data.userId == request.auth.uid && request.resource.data.userId == resource.data.userId)
+      );
     }
     match /archived_chats/{chatId} {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (resource.data.userId == request.auth.uid && request.resource.data.userId == resource.data.userId)
+      );
 
       match /{allSubcollections=**} {
         allow read, write: if isSignedIn() && (
@@ -124,7 +143,10 @@ service cloud.firestore {
     match /archived_messages/{messageId} {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (resource.data.userId == request.auth.uid && request.resource.data.userId == resource.data.userId)
+      );
     }
 
     // 7. Internal System Settings, Plans & Quota Limits
@@ -179,21 +201,30 @@ service cloud.firestore {
     match /activities/{activityId} {
       allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (resource.data.userId == request.auth.uid && request.resource.data.userId == resource.data.userId)
+      );
     }
 
     // 12. Conversions & Translations History
     match /conversions/{conversionId} {
       allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (resource.data.userId == request.auth.uid && request.resource.data.userId == resource.data.userId)
+      );
     }
 
     // 13. Legal Research Reports
     match /research_reports/{reportId} {
       allow read, delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (resource.data.userId == request.auth.uid && request.resource.data.userId == resource.data.userId)
+      );
     }
 
     // 14. System Logs (allow clients to submit live error logs)

@@ -39,7 +39,7 @@ interface EvidenceAnalyzerProps {
 export function EvidenceAnalyzer({ caseId, userId, caseTitle }: EvidenceAnalyzerProps) {
   const [files, setFiles] = useState<{ id: string; name: string; type: string; base64?: string; text?: string; size: number }[]>([]);
   const [analyzing, setAnalyzing] = useState(false);
-  const [activeSubTab, setActiveSubTab] = useState<"analysis" | "risks" | "probability" | "actions">("analysis");
+  const [activeSubTab, setActiveSubTab] = useState<"analysis" | "risks" | "opponent" | "actions">("analysis");
   const [report, setReport] = useState<any | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
@@ -314,10 +314,12 @@ export function EvidenceAnalyzer({ caseId, userId, caseTitle }: EvidenceAnalyzer
               "contradictions": ["hujjatlar orasidagi topilgan barcha real yoki mantiqiy qarama-qarshiliklar...", "..."],
               "potentialRisks": ["umumiy kutiluvchi yuridik va protsessual xavflar...", "..."]
             },
-            "winProbability": {
-              "score": 65,
-              "confidence": "High" or "Medium" or "Low",
-              "disclaimer": "Ushbu ko'rsatkich yuridik dalillarga asoslangan taxminiy AI tahlili bo'lib, rasmiy yuridik maslahat o'rnini bosa olmaydi."
+            "proceduralAssessment": {
+              "proceduralReadiness": 65,
+              "evidenceStrength": "Kuchli" or "O'rta" or "Yetarli emas",
+              "legalPosition": "weak" or "mixed" or "strong",
+              "proceduralRisk": "low" or "medium" or "high",
+              "assessmentSummary": "Ushbu ko'rsatkich protsessual tayyorgarlik va dalillarning to'liqligi darajasini aks ettiradi (sud natijasi kafolati emas)."
             },
             "riskMatrix": [
               { "id": "risk1", "level": "High" or "Medium" or "Low", "description": "Xavf tavsifi", "impact": "Ta'sir tafsiloti", "mitigation": "Yumshatish rejasi va choralari" }
@@ -383,10 +385,12 @@ export function EvidenceAnalyzer({ caseId, userId, caseTitle }: EvidenceAnalyzer
               "contradictions": ["found contradiction 1 between document A and B", "contradiction 2..."],
               "potentialRisks": ["legal risk 1 based on evidence", "legal risk 2..."]
             },
-            "winProbability": {
-              "score": 72,
-              "confidence": "High" (or "Medium" or "Low" based on amount of solid evidence present),
-              "disclaimer": "Ushbu ko'rsatkich yuridik dalillarga asoslangan taxminiy AI tahlili bo'lib, rasmiy yuridik maslahat o'rnini bosa olmaydi."
+            "proceduralAssessment": {
+              "proceduralReadiness": 72,
+              "evidenceStrength": "Kuchli" or "O'rta" or "Yetarli emas",
+              "legalPosition": "weak" or "mixed" or "strong",
+              "proceduralRisk": "low" or "medium" or "high",
+              "assessmentSummary": "Ushbu ko'rsatkich dalillarning protsessual tayyorgarligi va to'liqligi darajasi tahlilidir (sud natijasi kafolati emas)."
             },
             "riskMatrix": [
               { "id": "risk1", "level": "High" (or "Medium" or "Low"), "description": "Risk description", "impact": "Case outcome impact details", "mitigation": "Mitigation steps details" }
@@ -537,7 +541,7 @@ export function EvidenceAnalyzer({ caseId, userId, caseTitle }: EvidenceAnalyzer
       docContent += `- ${cat.name}: ${cat.score}/100\n`;
     });
     
-    docContent += `\n=== 2. MUVAFFAQIYAT EHTIMOLI (WIN PROBABILITY) ===\nKo'rsatkich: ${report.winProbability?.score}%\nIshonch darajasi: ${report.winProbability?.confidence}\nEslatma: ${report.winProbability?.disclaimer}\n\n`;
+    docContent += `\n=== 2. PROTSESSUAL TAYYORGARLIK VA DALILLAR KUCHI ===\nTayyorgarlik ko'rsatkichi: ${report.proceduralAssessment?.proceduralReadiness || report.scorecard?.overallScore || 65}%\nDalillar kuchi: ${report.proceduralAssessment?.evidenceStrength || "O'rta"}\nHuquqiy pozitsiya: ${report.proceduralAssessment?.legalPosition || "mixed"}\nEslatma: ${report.proceduralAssessment?.assessmentSummary || "Dalillarning protsessual tayyorgarlik darajasi ko'rsatkichi"}\n\n`;
     
     docContent += `=== 3. KUCHLI DALILLAR ===\n`;
     report.analysis?.strongEvidence?.forEach((e: string) => docContent += `+ ${e}\n`);
@@ -607,11 +611,12 @@ export function EvidenceAnalyzer({ caseId, userId, caseTitle }: EvidenceAnalyzer
           <p><strong>Yaratuvchi unvoni:</strong> Adliya va Loyiha AI Maslahatchisi</p>
           <hr/>
           
-          <h2>1. Muhim Xulosa va Muvaffaqiyat Ko'rsatkichi</h2>
+          <h2>1. Protsessual Tayyorgarlik va Dalillar Holati</h2>
           <div style="background-color: #eff6ff; padding: 15px; border-left: 4px solid #2563eb; margin-bottom: 20px; border-radius: 4px;">
-            <p style="font-size: 18px; margin: 0; color: #1e3a8a;"><strong>Taxminiy g'alaba qozonish ehtimoli:</strong> <span style="font-size: 24px; font-weight: bold; color: #2563eb;">${report.winProbability?.score}%</span></p>
-            <p style="margin: 5px 0 0 0;"><strong>Tahliliy ishonch hissi:</strong> ${report.winProbability?.confidence}</p>
-            <p style="margin: 5px 0 0 0; font-size: 11px; color: #64748b; font-style: italic;">Disclaimer: ${report.winProbability?.disclaimer}</p>
+            <p style="font-size: 18px; margin: 0; color: #1e3a8a;"><strong>Protsessual tayyorgarlik darajasi:</strong> <span style="font-size: 24px; font-weight: bold; color: #2563eb;">${report.proceduralAssessment?.proceduralReadiness || report.scorecard?.overallScore || 65}%</span></p>
+            <p style="margin: 5px 0 0 0;"><strong>Dalillar kuchi:</strong> ${report.proceduralAssessment?.evidenceStrength || "O'rta"}</p>
+            <p style="margin: 5px 0 0 0;"><strong>Huquqiy pozitsiya:</strong> ${report.proceduralAssessment?.legalPosition || "mixed"}</p>
+            <p style="margin: 5px 0 0 0; font-size: 11px; color: #64748b; font-style: italic;">Eslatma: ${report.proceduralAssessment?.assessmentSummary || "Ushbu baholash dalillar to'liqligi va tayyorgarlik ko'rsatkichi bo'lib, sud natijasi kafolati hisoblanmaydi."}</p>
           </div>
 
           <h2>2. Dalillar Scorecardi & Ballari</h2>
@@ -896,34 +901,34 @@ export function EvidenceAnalyzer({ caseId, userId, caseTitle }: EvidenceAnalyzer
             <div className="space-y-6">
               {/* MINI OVERVIEW PANEL */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="bg-linear-to-b from-indigo-50 to-white border border-indigo-100 rounded-2xl p-4 flex flex-col justify-between">
+                <div className="bg-linear-to-b from-blue-50 to-white border border-blue-100 rounded-2xl p-4 flex flex-col justify-between">
                   <div>
-                    <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest block mb-1">G'ALABA EHTIMOLI</span>
-                    <span className="text-3xl font-extrabold text-indigo-900">{report.winProbability?.score}%</span>
+                    <span className="text-[10px] font-bold text-blue-600 uppercase tracking-widest block mb-1">JARAYONGA TAYYORGARLIK</span>
+                    <span className="text-3xl font-extrabold text-blue-900">{report.proceduralAssessment?.proceduralReadiness || report.scorecard?.overallScore || 65}%</span>
                   </div>
-                  <span className="text-[10px] text-indigo-600/70 block mt-2 font-medium">Uzbekistan Court Scale</span>
+                  <span className="text-[10px] text-blue-600/70 block mt-2 font-medium">Protsessual tayyorgarlik darajasi</span>
                 </div>
 
                 <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 flex flex-col justify-between">
                   <div>
-                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">CONFIDENCE LEVEL</span>
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">DALILLAR KUCHI</span>
                     <div className="flex items-center gap-1.5 mt-1.5">
                       <span className={`w-2 h-2 rounded-full ${
-                        report.winProbability?.confidence === 'High' ? 'bg-emerald-500' :
-                        report.winProbability?.confidence === 'Medium' ? 'bg-amber-500' : 'bg-rose-500'
+                        (report.proceduralAssessment?.evidenceStrength === 'Kuchli' || report.proceduralAssessment?.evidenceStrength === 'high') ? 'bg-emerald-500' :
+                        (report.proceduralAssessment?.evidenceStrength === 'O\'rta' || report.proceduralAssessment?.evidenceStrength === 'medium') ? 'bg-amber-500' : 'bg-rose-500'
                       }`}></span>
-                      <span className="text-sm font-bold text-slate-800">{report.winProbability?.confidence || 'High'}</span>
+                      <span className="text-sm font-bold text-slate-800">{report.proceduralAssessment?.evidenceStrength || "O'rta"}</span>
                     </div>
                   </div>
-                  <span className="text-[10px] text-slate-500 block mt-2">Dalil ishonchlilik darajasi</span>
+                  <span className="text-[10px] text-slate-500 block mt-2">Huquqiy asoslar ishonchliligi</span>
                 </div>
 
                 <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 flex flex-col justify-between">
                   <div>
-                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">UMUMIY DALILLAR BALL</span>
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">PROTSESSUAL TAYYORGARLIK BALLI</span>
                     <span className="text-3xl font-extrabold text-slate-800">{report.scorecard?.overallScore || 65} <span className="text-xs font-normal text-slate-400">/100</span></span>
                   </div>
-                  <span className="text-[10px] text-slate-500 block mt-2">Sifat va tayyorgarlik darajasi</span>
+                  <span className="text-[10px] text-slate-500 block mt-2">Hujjatlar to'liqligi darajasi</span>
                 </div>
               </div>
 
@@ -947,12 +952,12 @@ export function EvidenceAnalyzer({ caseId, userId, caseTitle }: EvidenceAnalyzer
                       : "border-transparent text-slate-500 hover:text-slate-800"
                   }`}
                 >
-                  Risiz Matrix
+                  Risk Matrix
                 </button>
                 <button
-                  onClick={() => setActiveSubTab("probability")}
+                  onClick={() => setActiveSubTab("opponent")}
                   className={`flex-1 pb-3 text-xs font-bold text-center border-b-2 transition-all ${
-                    activeSubTab === "probability" 
+                    activeSubTab === "opponent" 
                       ? "border-indigo-600 text-indigo-600 font-extrabold" 
                       : "border-transparent text-slate-500 hover:text-slate-800"
                   }`}
@@ -1136,7 +1141,7 @@ export function EvidenceAnalyzer({ caseId, userId, caseTitle }: EvidenceAnalyzer
               )}
 
               {/* TAB CONTENT: OPPONENT STRATEGY */}
-              {activeSubTab === "probability" && (
+              {activeSubTab === "opponent" && (
                 <div className="space-y-6">
                   {report.opponentAnalysis && (
                     <div className="space-y-5">
@@ -1259,7 +1264,7 @@ export function EvidenceAnalyzer({ caseId, userId, caseTitle }: EvidenceAnalyzer
                 </span>
                 
                 <p className="text-[9px] text-slate-500 italic max-w-sm text-left sm:text-right">
-                  <strong>Eslatma (Disclaimer):</strong> {report.winProbability?.disclaimer || "Bu ma'lumotlar AI baholashi bo'lib, rasmiy yuridik qaror yoki kafolat bo'la olmaydi."}
+                  <strong>Eslatma:</strong> {report.proceduralAssessment?.assessmentSummary || "Ushbu ma'lumotlar dalillar to'liqligi va protsessual tayyorgarlik tahlili bo'lib, sud natijasi bashorati yoki rasmiy kafolat hisoblanmaydi."}
                 </p>
               </div>
             </div>

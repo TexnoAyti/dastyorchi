@@ -5,6 +5,7 @@ import { db, auth } from "../firebase";
 import { User, Mail, CreditCard, Check, Loader2, Camera, Crown, Sparkles, Save, Globe, Zap, ShieldCheck, Cpu, AlertCircle, Lock } from "lucide-react";
 import { motion } from "framer-motion";
 import { useLanguage } from "../contexts/LanguageContext";
+import { usePaywall } from "../contexts/PaywallContext";
 import { getApiAuthorizationHeader } from "../services/apiAuth";
 
 const AVATAR_PRESETS = [
@@ -20,6 +21,7 @@ const AVATAR_PRESETS = [
 
 export function UserProfile({ user }: { user?: any }) {
   const { t, language, setLanguage } = useLanguage();
+  const { openPaywall } = usePaywall();
   const [currentUserData, setCurrentUserData] = useState<any>(user || null);
   const [loading, setLoading] = useState(!user);
   const [saving, setSaving] = useState(false);
@@ -470,20 +472,23 @@ export function UserProfile({ user }: { user?: any }) {
                   </div>
                 </div>
 
-                {/* Subscription Tier toggle panel */}
+                {/* Subscription Tier display panel (Authoritative - upgraded via official payment gateway) */}
                 <div>
-                  <label className="block text-sm font-semibold text-gray-700 dark:text-zinc-300 mb-3 block">
-                    {language === 'uz_lat' ? 'Obuna darajasi (Subscription)' : language === 'uz_cyr' ? 'Обуна даражаси (Subscription)' : language === 'ru' ? 'Тарифный план подписки' : 'Membership Subscription Tier'}
-                  </label>
+                  <div className="flex items-center justify-between mb-3">
+                    <label className="block text-sm font-semibold text-gray-700 dark:text-zinc-300">
+                      {language === 'uz_lat' ? 'Obuna darajasi (Subscription)' : language === 'uz_cyr' ? 'Обуна даражаси (Subscription)' : language === 'ru' ? 'Тарифный план подписки' : 'Membership Subscription Tier'}
+                    </label>
+                    <span className="text-[11px] text-gray-400 dark:text-zinc-500 font-medium">
+                      {language === 'uz_lat' ? 'Avtorizatsiyalangan tizim' : language === 'uz_cyr' ? 'Авторизацияланган тизим' : language === 'ru' ? 'Авторизованный статус' : 'Server Authoritative'}
+                    </span>
+                  </div>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     {/* Free Option */}
-                    <button
-                      type="button"
-                      onClick={() => setSubscriptionTier("free")}
-                      className={`p-4 rounded-xl border text-left transition-all bg-white dark:bg-zinc-900 relative flex flex-col justify-between ${
+                    <div
+                      className={`p-4 rounded-xl border text-left bg-white dark:bg-zinc-900 relative flex flex-col justify-between ${
                         subscriptionTier === "free"
                           ? "border-blue-600 dark:border-blue-500 bg-blue-50/20 dark:bg-blue-950/20 shadow-sm"
-                          : "border-gray-200 dark:border-zinc-800 hover:border-gray-300 dark:hover:border-zinc-700"
+                          : "border-gray-200 dark:border-zinc-800 opacity-80"
                       }`}
                     >
                       <div>
@@ -498,27 +503,28 @@ export function UserProfile({ user }: { user?: any }) {
                           )}
                         </div>
                         <p className="text-xs text-gray-500 dark:text-zinc-400 mt-1">
-                          {language === 'uz_lat' ? 'Kuniga 10 ta bepul AI so\'rov, 3 ta eksport' : 
-                           language === 'uz_cyr' ? 'Кунига 10 та бепул AI сўров, 3 та экспорт' : 
-                           language === 'ru' ? '10 бесплатных запросов и 3 экспорта в сутки' : 
-                           '10 daily queries, 3 document exports'}
+                          {language === 'uz_lat' ? 'Kuniga 10 ta AI kredit, 3 ta eksport' : 
+                           language === 'uz_cyr' ? 'Кунига 10 та AI кредит, 3 та экспорт' : 
+                           language === 'ru' ? '10 AI кредитов и 3 экспорта в сутки' : 
+                           '10 daily AI credits, 3 document exports'}
                         </p>
                       </div>
-                      <div className="mt-4">
+                      <div className="mt-4 pt-2 border-t border-gray-100 dark:border-zinc-800 flex items-center justify-between">
                         <p className="text-sm font-extrabold text-gray-800 dark:text-zinc-200">$0 <span className="text-xs font-normal text-gray-400 dark:text-zinc-500">
                           {language === 'uz_lat' ? '/oylik' : language === 'uz_cyr' ? '/ойлик' : language === 'ru' ? '/месяц' : '/month'}
                         </span></p>
+                        {subscriptionTier === "free" && (
+                          <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">Faol</span>
+                        )}
                       </div>
-                    </button>
+                    </div>
 
                     {/* Pro Option */}
-                    <button
-                      type="button"
-                      onClick={() => setSubscriptionTier("pro")}
-                      className={`p-4 rounded-xl border text-left transition-all bg-white dark:bg-zinc-900 relative overflow-hidden flex flex-col justify-between ${
+                    <div
+                      className={`p-4 rounded-xl border text-left bg-white dark:bg-zinc-900 relative overflow-hidden flex flex-col justify-between ${
                         subscriptionTier === "pro"
                           ? "border-amber-500 bg-amber-50/20 dark:bg-amber-950/20 shadow-sm ring-1 ring-amber-500"
-                          : "border-gray-200 dark:border-zinc-800 hover:border-gray-300 dark:hover:border-zinc-700"
+                          : "border-gray-200 dark:border-zinc-800"
                       }`}
                     >
                       <div className="absolute right-0 top-0 bg-amber-500 text-white px-2 py-0.5 rounded-bl text-[8px] font-extrabold tracking-wider uppercase flex items-center gap-0.5 shadow-sm">
@@ -534,27 +540,36 @@ export function UserProfile({ user }: { user?: any }) {
                           )}
                         </div>
                         <p className="text-xs text-gray-500 dark:text-zinc-400 mt-1">
-                          {language === 'uz_lat' ? 'Cheksiz so\'rovlar va eksport, Tahlil, Strategiya' : 
-                           language === 'uz_cyr' ? 'Чексиз сўровлар ва экспорт, Таҳлил, Стратегия' : 
-                           language === 'ru' ? 'Безлимитные опции, Аналитика, Стратегия и Планы' : 
-                           'Unlimited queries, exports, analysis and strategy plans'}
+                          {language === 'uz_lat' ? 'Pro — kuniga 100 AI kredit, 15 ta eksport, Tahlil, Strategiya' : 
+                           language === 'uz_cyr' ? 'Pro — кунига 100 AI кредит, 15 та экспорт, Таҳлил, Стратегия' : 
+                           language === 'ru' ? 'Pro — 100 AI кредитов/день, 15 экспортов, Анализ, Стратегия' : 
+                           'Pro — 100 daily AI credits, 15 exports, analysis and strategy'}
                         </p>
                       </div>
-                      <div className="mt-4">
+                      <div className="mt-4 pt-2 border-t border-gray-100 dark:border-zinc-800 flex items-center justify-between">
                         <p className="text-sm font-extrabold text-amber-700 dark:text-amber-400">$19.99 <span className="text-xs font-normal text-gray-500 dark:text-zinc-500">
                           {language === 'uz_lat' ? '/oylik' : language === 'uz_cyr' ? '/ойлик' : language === 'ru' ? '/месяц' : '/month'}
                         </span></p>
+                        {subscriptionTier === "pro" ? (
+                          <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider">Faol</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openPaywall("general")}
+                            className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white text-[10px] font-bold rounded-lg transition-all"
+                          >
+                            Yangilash
+                          </button>
+                        )}
                       </div>
-                    </button>
+                    </div>
 
                     {/* Business Option */}
-                    <button
-                      type="button"
-                      onClick={() => setSubscriptionTier("business")}
-                      className={`p-4 rounded-xl border text-left transition-all bg-white dark:bg-zinc-900 relative overflow-hidden flex flex-col justify-between ${
+                    <div
+                      className={`p-4 rounded-xl border text-left bg-white dark:bg-zinc-900 relative overflow-hidden flex flex-col justify-between ${
                         subscriptionTier === "business"
                           ? "border-indigo-600 bg-indigo-50/20 dark:bg-indigo-950/20 shadow-sm ring-1 ring-indigo-600"
-                          : "border-gray-200 dark:border-zinc-800 hover:border-gray-300 dark:hover:border-zinc-700"
+                          : "border-gray-200 dark:border-zinc-800"
                       }`}
                     >
                       <div className="absolute right-0 top-0 bg-indigo-600 text-white px-2 py-0.5 rounded-bl text-[8px] font-extrabold tracking-wider uppercase flex items-center gap-0.5 shadow-sm">
@@ -570,18 +585,29 @@ export function UserProfile({ user }: { user?: any }) {
                           )}
                         </div>
                         <p className="text-xs text-gray-500 dark:text-zinc-400 mt-1">
-                          {language === 'uz_lat' ? 'Pro + Ustuvorlik, Kengaytirilgan chuqur tahlil' : 
-                           language === 'uz_cyr' ? 'Pro + Устуворлик, Кенгайтирилган чуқур таҳлил' : 
-                           language === 'ru' ? 'Pro + Выделенный приоритет, Расширенный аудит' : 
-                           'Pro benefits + High Priority, Deep audit of cases'}
+                          {language === 'uz_lat' ? 'Business — kuniga 300 AI kredit, 100 ta eksport, Kengaytirilgan chuqur tahlil' : 
+                           language === 'uz_cyr' ? 'Business — кунига 300 AI кредит, 100 та экспорт, Кенгайтирилган чуқур таҳлил' : 
+                           language === 'ru' ? 'Business — 300 AI кредитов/день, 100 экспортов, Расширенный глубокий анализ' : 
+                           'Business — 300 daily AI credits, 100 exports, deep case audits'}
                         </p>
                       </div>
-                      <div className="mt-4">
+                      <div className="mt-4 pt-2 border-t border-gray-100 dark:border-zinc-800 flex items-center justify-between">
                         <p className="text-sm font-extrabold text-indigo-700 dark:text-indigo-400">$49.99 <span className="text-xs font-normal text-gray-500 dark:text-zinc-500">
                           {language === 'uz_lat' ? '/oylik' : language === 'uz_cyr' ? '/ойлик' : language === 'ru' ? '/месяц' : '/month'}
                         </span></p>
+                        {subscriptionTier === "business" ? (
+                          <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">Faol</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openPaywall("general")}
+                            className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold rounded-lg transition-all"
+                          >
+                            Yangilash
+                          </button>
+                        )}
                       </div>
-                    </button>
+                    </div>
                   </div>
                 </div>
               </div>

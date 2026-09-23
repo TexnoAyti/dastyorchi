@@ -13,7 +13,6 @@ import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 import { handleFirestoreError, OperationType } from "../lib/firestore-error";
 import { archiveOldDocuments } from "../services/dbArchiveService";
 import { useNotification } from "../contexts/NotificationContext";
-import { checkRequestQuota, incrementUserRequests } from "../services/subscriptionService";
 import { usePaywall } from "../contexts/PaywallContext";
 import { generateMeaningfulFilename } from "../utils/documentNaming";
 
@@ -79,15 +78,6 @@ export function Builder() {
   const onSubmit = async (data: any) => {
     setIsGenerating(true);
     try {
-      if (auth.currentUser) {
-        const quota = await checkRequestQuota(auth.currentUser.uid);
-        if (!quota.allowed) {
-          setIsGenerating(false);
-          openPaywall("requests");
-          return;
-        }
-      }
-
       const variants = template.variants.map(v => v[language as keyof typeof v]).filter(Boolean);
       const randomVariant = variants.length > 0 ? variants[Math.floor(Math.random() * variants.length)] : "";
 
@@ -101,10 +91,6 @@ export function Builder() {
         randomVariant,
         language
       );
-
-      if (auth.currentUser) {
-        await incrementUserRequests(auth.currentUser.uid);
-      }
 
       let docRef: any = null;
       try {
@@ -154,9 +140,19 @@ export function Builder() {
       }
 
       navigate(`/result/${docRef.id}`);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Generation Error:", error);
-      alert("Hujjatni yaratishda xatolik yuz berdi. Iltimos qaytadan urinib ko'ring.");
+      if (
+        error?.errorData?.code === "AI_CREDIT_LIMIT" ||
+        error?.code === "AI_CREDIT_LIMIT" ||
+        error?.message?.includes("AI_CREDIT_LIMIT") ||
+        error?.message?.includes("limitingiz tugadi") ||
+        error?.status === 429
+      ) {
+        openPaywall("requests");
+        return;
+      }
+      alert(error?.message || "Hujjatni yaratishda xatolik yuz berdi. Iltimos qaytadan urinib ko'ring.");
     } finally {
       setIsGenerating(false);
     }

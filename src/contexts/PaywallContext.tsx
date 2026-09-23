@@ -174,15 +174,15 @@ export function PaywallProvider({ children }: { children: React.ReactNode }) {
                   <div className="flex gap-3 items-start">
                     <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                     <div>
-                      <p className="text-xs font-bold text-white">Cheksiz AI So'rovlar</p>
-                      <p className="text-[10px] text-slate-400">Kutmasdan istalgancha shartnomalarni tahlil qilish imkoniyati</p>
+                      <p className="text-xs font-bold text-white">Kunlik Kengaytirilgan AI Kreditlar</p>
+                      <p className="text-[10px] text-slate-400">Pro: kuniga 100 ta, Business: kuniga 300 ta AI kredit</p>
                     </div>
                   </div>
                   <div className="flex gap-3 items-start">
                     <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                     <div>
-                      <p className="text-xs font-bold text-white">Cheksiz Word/PDF yuklab olishlar</p>
-                      <p className="text-[10px] text-slate-400">Eksport yuklash limitlarisiz barcha hujjat nusxalari</p>
+                      <p className="text-xs font-bold text-white">Kengaytirilgan Word/PDF yuklab olishlar</p>
+                      <p className="text-[10px] text-slate-400">Pro: kuniga 15 ta, Business: kuniga 100 ta eksport</p>
                     </div>
                   </div>
                   <div className="flex gap-3 items-start">
@@ -236,10 +236,10 @@ export function PaywallProvider({ children }: { children: React.ReactNode }) {
                         
                         <ul className="mt-4 space-y-2 text-[11px] text-gray-600 font-medium">
                           <li className="flex items-center gap-1.5">
-                            <Check className="w-3.5 h-3.5 text-amber-500 shrink-0" /> Cheksiz AI so'rovi
+                            <Check className="w-3.5 h-3.5 text-amber-500 shrink-0" /> Kuniga 100 AI kredit
                           </li>
                           <li className="flex items-center gap-1.5">
-                            <Check className="w-3.5 h-3.5 text-amber-500 shrink-0" /> Cheksiz Word/PDF eksport
+                            <Check className="w-3.5 h-3.5 text-amber-500 shrink-0" /> Kuniga 15 Word/PDF eksport
                           </li>
                           <li className="flex items-center gap-1.5">
                             <Check className="w-3.5 h-3.5 text-amber-500 shrink-0" /> Risklar va yo'llanmalar tahlili
@@ -275,7 +275,10 @@ export function PaywallProvider({ children }: { children: React.ReactNode }) {
                         
                         <ul className="mt-4 space-y-2 text-[11px] text-gray-600 font-medium">
                           <li className="flex items-center gap-1.5">
-                            <Check className="w-3.5 h-3.5 text-indigo-500 shrink-0" /> Hammasi cheksiz + eng tezkor
+                            <Check className="w-3.5 h-3.5 text-indigo-500 shrink-0" /> Kuniga 300 AI kredit + eng tezkor
+                          </li>
+                          <li className="flex items-center gap-1.5">
+                            <Check className="w-3.5 h-3.5 text-indigo-500 shrink-0" /> Kuniga 100 Word/PDF eksport
                           </li>
                           <li className="flex items-center gap-1.5">
                             <Check className="w-3.5 h-3.5 text-indigo-500 shrink-0" /> Kengaytirilgan Biznes rejimi

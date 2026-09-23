@@ -116,7 +116,6 @@ export interface Case {
   proceduralReadiness?: number;
   evidenceStrength?: "Kuchli" | "O'rta" | "Yetarli emas" | string;
   missingInformation?: string[];
-  winningProbability?: number; // legacy compatibility
   riskLevel?: string;
   strengths?: string[];
   weaknesses?: string[];
@@ -160,7 +159,6 @@ export interface ChatSession {
   proceduralReadiness?: number;
   evidenceStrength?: string;
   missingInformation?: string[];
-  winningProbability?: number; // legacy compatibility
   riskLevel?: string;
   strengths?: string[];
   weaknesses?: string[];
@@ -172,7 +170,7 @@ export interface ChatSession {
 }
 
 export interface RiskAnalysis {
-  successProbability: number;
+  proceduralReadiness: number;
   risks: string[];
   weakPoints: string[];
   recommendations: string[];
@@ -201,10 +199,12 @@ export interface EvidenceReport {
     contradictions: string[];
     potentialRisks: string[];
   };
-  winProbability: {
-    score: number;
-    confidence: "High" | "Medium" | "Low" | string;
-    disclaimer: string;
+  proceduralAssessment?: {
+    proceduralReadiness: number;
+    evidenceStrength: "Kuchli" | "O'rta" | "Yetarli emas" | "low" | "medium" | "high" | string;
+    legalPosition: "weak" | "mixed" | "strong" | string;
+    proceduralRisk: "low" | "medium" | "high" | string;
+    assessmentSummary?: string;
   };
   riskMatrix: {
     id: string;

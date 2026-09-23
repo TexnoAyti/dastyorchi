@@ -118,12 +118,19 @@ export function Navbar({ user, children }: { user: any; children?: React.ReactNo
 
   useEffect(() => {
      if (!user) return;
-     if (user.role === "admin" || user.email === "umidjonpremium6@gmail.com" || user.email === "arslonovazamat11@gmail.com") {
+     if (user.role === "admin") {
         setIsAdmin(true);
         return;
      }
      const checkAdmin = async () => {
           try {
+             // Check custom claims from Firebase Auth token
+             const tokenResult = await auth.currentUser?.getIdTokenResult();
+             if (tokenResult?.claims?.role === "admin" || tokenResult?.claims?.admin === true) {
+                setIsAdmin(true);
+                return;
+             }
+             // Check Firestore user document
              const userDoc = await getDoc(doc(db, "users", user.uid));
              if (userDoc.exists() && userDoc.data().role === "admin") {
                 setIsAdmin(true);

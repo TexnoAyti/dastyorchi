@@ -119,8 +119,8 @@ export function AdminPanel({ user }: { user?: any }) {
         // Populate standard defaults if empty
         const defaultPlans: Plan[] = [
           { id: "free", name: "Bepul (Free)", price: 0, priceUZS: 0, requestLimit: 10, exportLimit: 3, features: [], isEnabled: true },
-          { id: "pro", name: "Pro Premium", price: 19.99, priceUZS: 250000, requestLimit: 999999, exportLimit: 999999, features: ["riskAnalysis", "strategyPlan", "aiExpertise"], isEnabled: true },
-          { id: "business", name: "Business", price: 49.99, priceUZS: 630000, requestLimit: 999999, exportLimit: 999999, features: ["riskAnalysis", "strategyPlan", "aiExpertise", "advancedLegalAnalysis", "priorityProcessing"], isEnabled: true }
+          { id: "pro", name: "Pro Premium", price: 19.99, priceUZS: 250000, requestLimit: 100, exportLimit: 15, features: ["riskAnalysis", "strategyPlan", "aiExpertise"], isEnabled: true },
+          { id: "business", name: "Business", price: 49.99, priceUZS: 630000, requestLimit: 300, exportLimit: 100, features: ["riskAnalysis", "strategyPlan", "aiExpertise", "advancedLegalAnalysis", "priorityProcessing"], isEnabled: true }
         ];
         await setDoc(doc(db, "internal", "plans"), { plans: defaultPlans });
         setPlans(defaultPlans);

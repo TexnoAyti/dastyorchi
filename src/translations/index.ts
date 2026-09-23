@@ -24,7 +24,7 @@ export interface TranslationSchema {
     totalCases: string;
     activeCases: string;
     generatedDocs: string;
-    winProbability: string;
+    proceduralReadiness: string;
     quickActions: string;
     consultLawyerSub: string;
     newCaseSub: string;
@@ -92,7 +92,7 @@ export interface TranslationSchema {
     uploadedAt: string;
     buildPackage: string;
     packageSub: string;
-    winningProbability: string;
+    proceduralReadiness: string;
     riskLevel: string;
     noCases: string;
     noEvidence: string;
@@ -207,7 +207,7 @@ export const translations: Record<Language, TranslationSchema> = {
       totalCases: "Jami ishlar",
       activeCases: "Faol ishlar",
       generatedDocs: "Yaratilgan hujjatlar",
-      winProbability: "Yutuq ehtimoli (O'rtacha)",
+      proceduralReadiness: "Jarayonga tayyorgarlik (O'rtacha)",
       quickActions: "Tezkor amallar",
       consultLawyerSub: "AI Advokat bilan onlayn maslahatlashish",
       newCaseSub: "Yangi sud ishini yaratish va tahlil qilish",
@@ -254,7 +254,7 @@ export const translations: Record<Language, TranslationSchema> = {
     },
     cases: {
       title: "Sud ishlari portali",
-      sub: "Sud ishlarini boshqarish, dalillarni tahlil qilish va yutuq ehtimolini hisoblash.",
+      sub: "Sud ishlarini boshqarish, dalillarni tahlil qilish va jarayonga tayyorgarlik darajasini baholash.",
       createNew: "Yangi ish ochish",
       caseName: "Ish sarlavhasi",
       category: "Ish toifasi",
@@ -275,7 +275,7 @@ export const translations: Record<Language, TranslationSchema> = {
       uploadedAt: "Yuklangan vaqt",
       buildPackage: "Sud paketini yig'ish",
       packageSub: "Dalillar va arizalarni tizimli tartiblash",
-      winningProbability: "Tayyorgarlik darajasi",
+      proceduralReadiness: "Tayyorgarlik darajasi",
       riskLevel: "Xavf darajasi",
       noCases: "Hozircha sud ishlari yaratilmagan.",
       noEvidence: "Ushbu ish bo'yicha dalillar yuklanmagan.",
@@ -388,7 +388,7 @@ export const translations: Record<Language, TranslationSchema> = {
       totalCases: "Жами ишлар",
       activeCases: "Фаол ишлар",
       generatedDocs: "Яратилган ҳужжатлар",
-      winProbability: "Ютуқ эҳтимоли (Ўртача)",
+      proceduralReadiness: "Жараёнга тайёргарлик (Ўртача)",
       quickActions: "Тезкор амаллар",
       consultLawyerSub: "АИ Адвокат билан онлайн маслаҳатлашиш",
       newCaseSub: "Янги суд ишини яратиш ва таҳлил қилиш",
@@ -435,7 +435,7 @@ export const translations: Record<Language, TranslationSchema> = {
     },
     cases: {
       title: "Суд ишлари портали",
-      sub: "Суд ишларини бошқариш, далилларни таҳлил қилиш ва ютуқ эҳтимолини ҳисоблаш.",
+      sub: "Суд ишларини бошқариш, далилларни таҳлил қилиш ва жараёнга тайёргарлик даражасини баҳолаш.",
       createNew: "Янги иш очиш",
       caseName: "Иш сарлавҳаси",
       category: "Иш тоифаси",
@@ -456,7 +456,7 @@ export const translations: Record<Language, TranslationSchema> = {
       uploadedAt: "Юкланган вақт",
       buildPackage: "Суд пакетини йиғиш",
       packageSub: "Далиллар ва аризаларни тизимли тартиблаш",
-      winningProbability: "Тайёргарлик даражаси",
+      proceduralReadiness: "Тайёргарлик даражаси",
       riskLevel: "Хавф даражаси",
       noCases: "Ҳозирча суд ишлари яратилмаган.",
       noEvidence: "Ушбу иш бўйича далиллар юкланмаган.",
@@ -569,7 +569,7 @@ export const translations: Record<Language, TranslationSchema> = {
       totalCases: "Всего дел",
       activeCases: "Активные дела",
       generatedDocs: "Создано документов",
-      winProbability: "Вероятность успеха (Средняя)",
+      proceduralReadiness: "Процессуальная готовность (Средняя)",
       quickActions: "Быстрые действия",
       consultLawyerSub: "Онлайн консультация с ИИ-Адвокатом",
       newCaseSub: "Создать новое дело и провести ИИ-аналитику",
@@ -616,7 +616,7 @@ export const translations: Record<Language, TranslationSchema> = {
     },
     cases: {
       title: "Судебный портал",
-      sub: "Управляйте судебными делами, анализируйте доказательства и прогнозируйте вероятность выигрыша.",
+      sub: "Управляйте судебными делами, анализируйте доказательства и оценивайте процессуальную готовность.",
       createNew: "Открыть новое дело",
       caseName: "Заголовок дела",
       category: "Категория",
@@ -637,7 +637,7 @@ export const translations: Record<Language, TranslationSchema> = {
       uploadedAt: "Дата загрузки",
       buildPackage: "Собрать судебный пакет",
       packageSub: "Систематизация документов и доказательств",
-      winningProbability: "Процессуальная готовность",
+      proceduralReadiness: "Процессуальная готовность",
       riskLevel: "Уровень риска",
       noCases: "Судебные дела еще не созданы.",
       noEvidence: "Доказательства по этому делу еще не добавлены.",
@@ -750,7 +750,7 @@ export const translations: Record<Language, TranslationSchema> = {
       totalCases: "Total Cases",
       activeCases: "Active Cases",
       generatedDocs: "Generated Docs",
-      winProbability: "Win Rate (Average)",
+      proceduralReadiness: "Procedural Readiness (Average)",
       quickActions: "Quick Actions",
       consultLawyerSub: "Online consultation with AI Lawyer",
       newCaseSub: "Create a new court case and run AI analytics",
@@ -797,7 +797,7 @@ export const translations: Record<Language, TranslationSchema> = {
     },
     cases: {
       title: "Court Docket Center",
-      sub: "Manage courtroom cases, structure evidence packages, and estimate winning probability.",
+      sub: "Manage courtroom cases, structure evidence packages, and assess procedural readiness.",
       createNew: "Initiate Case Filings",
       caseName: "Case Name",
       category: "Category",
@@ -818,7 +818,7 @@ export const translations: Record<Language, TranslationSchema> = {
       uploadedAt: "Uploaded",
       buildPackage: "Synthesize Court Package",
       packageSub: "Package all files and declarations cleanly",
-      winningProbability: "Procedural Readiness",
+      proceduralReadiness: "Procedural Readiness",
       riskLevel: "Risk Level",
       noCases: "No judicial cases created yet.",
       noEvidence: "No evidence loaded for this active file.",

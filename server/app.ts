@@ -585,6 +585,11 @@ export async function isUserAdmin(userId: string, req?: express.Request): Promis
     .map(s => s.trim())
     .filter(Boolean);
 
+  const adminEmails = (process.env.ADMIN_EMAILS || "")
+    .split(",")
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+
   let telegramIdStr = "";
   if (userId.startsWith("tg_")) {
     telegramIdStr = userId.replace("tg_", "");
@@ -610,7 +615,7 @@ export async function isUserAdmin(userId: string, req?: express.Request): Promis
           if (decoded?.role === "admin" || decoded?.admin === true) {
             return true;
           }
-          if (decoded?.email && (decoded.email === "arslonovazamat11@gmail.com" || decoded.email === "admin@dastyorchi.uz")) {
+          if (decoded?.email && adminEmails.length > 0 && adminEmails.includes(decoded.email.toLowerCase())) {
             return true;
           }
         } catch {}
@@ -625,7 +630,7 @@ export async function isUserAdmin(userId: string, req?: express.Request): Promis
         const data = snap.data();
         if (data?.role === "admin") return true;
         if (data?.telegramId && adminIds.includes(String(data.telegramId))) return true;
-        if (data?.email && (data.email === "arslonovazamat11@gmail.com" || data.email === "admin@dastyorchi.uz")) return true;
+        if (data?.email && adminEmails.length > 0 && adminEmails.includes(data.email.toLowerCase())) return true;
       }
     } catch (err) {
       console.error("[AdminCheck] Firestore check error:", err);
@@ -2076,9 +2081,13 @@ apiRouter.post("/payment/create-invoice", async (req, res) => {
         userId: authUserId,
         tier,
         amount: amountUZS,
+        currency: "UZS",
+        provider: paymentMethod,
         paymentMethod,
         status: "pending",
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        externalInvoiceId: null,
         returnUrl: finalReturnUrl
       });
     }
@@ -2218,6 +2227,7 @@ apiRouter.post("/payment/click-webhook", async (req, res) => {
           await dbAdmin.collection("payment_orders").doc(merchant_trans_id).set({
             status: "completed",
             click_trans_id,
+            updatedAt: new Date().toISOString(),
             completedAt: new Date().toISOString()
           }, { merge: true });
         }
@@ -2351,6 +2361,7 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
       await transRef.set({
         id: transId,
         userId,
+        orderId: params.account?.orderId || null,
         amount,
         time,
         state: 1,
@@ -2404,6 +2415,15 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
           state: 2,
           perform_time: performTime
         });
+
+        if (transData.orderId) {
+          await dbAdmin.collection("payment_orders").doc(transData.orderId).set({
+            status: "completed",
+            payme_trans_id: transId,
+            updatedAt: new Date().toISOString(),
+            completedAt: new Date().toISOString()
+          }, { merge: true });
+        }
 
         return res.json({
           jsonrpc: "2.0",
@@ -2464,6 +2484,12 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
           cancel_time: cancelTime,
           reason
         });
+        if (transData.orderId) {
+          await dbAdmin.collection("payment_orders").doc(transData.orderId).set({
+            status: "cancelled",
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+        }
         return res.json({
           jsonrpc: "2.0",
           result: {
@@ -2480,6 +2506,13 @@ apiRouter.post("/payment/payme-webhook", async (req, res) => {
           cancel_time: cancelTime,
           reason
         });
+
+        if (transData.orderId) {
+          await dbAdmin.collection("payment_orders").doc(transData.orderId).set({
+            status: "cancelled",
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+        }
 
         await dbAdmin.collection("users").doc(transData.userId).update({
           subscriptionTier: "free",

@@ -799,9 +799,8 @@ If unsure -> default to:
           parsed.content = cleanAndValidateHTML(parsed.content);
         }
         if (parsed.analysis) {
-          const readiness = parsed.analysis.proceduralReadiness ?? parsed.analysis.winningProbability ?? 50;
+          const readiness = parsed.analysis.proceduralReadiness ?? 50;
           parsed.analysis.proceduralReadiness = readiness;
-          parsed.analysis.winningProbability = readiness;
           parsed.analysis.evidenceStrength = parsed.analysis.evidenceStrength || "O'rta";
           parsed.analysis.missingInformation = Array.isArray(parsed.analysis.missingInformation) ? parsed.analysis.missingInformation : [];
         }
@@ -816,7 +815,6 @@ If unsure -> default to:
             proceduralReadiness: 50, 
             evidenceStrength: "O'rta", 
             missingInformation: [], 
-            winningProbability: 50, 
             riskLevel: "", 
             strengths: [], 
             weaknesses: [], 
@@ -886,9 +884,8 @@ If unsure -> default to:
         parsed.content = cleanAndValidateHTML(parsed.content);
       }
       if (parsed.analysis) {
-        const readiness = parsed.analysis.proceduralReadiness ?? parsed.analysis.winningProbability ?? 50;
+        const readiness = parsed.analysis.proceduralReadiness ?? 50;
         parsed.analysis.proceduralReadiness = readiness;
-        parsed.analysis.winningProbability = readiness;
         parsed.analysis.evidenceStrength = parsed.analysis.evidenceStrength || "O'rta";
         parsed.analysis.missingInformation = Array.isArray(parsed.analysis.missingInformation) ? parsed.analysis.missingInformation : [];
       }
@@ -903,7 +900,6 @@ If unsure -> default to:
           proceduralReadiness: 50, 
           evidenceStrength: "O'rta", 
           missingInformation: [], 
-          winningProbability: 50, 
           riskLevel: "", 
           strengths: [], 
           weaknesses: [], 
@@ -954,7 +950,10 @@ ${promptContext}
 
 Generate a FULL professional legal document in HTML based on: ${description}
 Current Date: ${currentDate}
-Requirements: Valid HTML, auto-fill all missing fields with realistic dummy data.
+Requirements:
+1. Valid semantic HTML.
+2. STRICT ANTI-FABRICATION RULE: NEVER invent factual case details (party names, addresses, passport numbers, PINFL/JShShIR, contract numbers, dates, claim amounts, or bank accounts).
+3. If factual data is missing, use explicit visible placeholders such as "__________" or structured tags like {{DA_VO_SUMMASI}}, {{JAVOBGAR_FISH}}, {{SHARTNOMA_SANASI}}. Never fabricate fake dummy data to make the document appear completed.
 `;
 
   try {

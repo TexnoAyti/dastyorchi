@@ -24,10 +24,10 @@ export interface PlanLimits {
 export const DEFAULT_PLAN_LIMITS: PlanLimits = {
   freeRequestLimit: 10,
   freeExportLimit: 3,
-  proRequestLimit: 999999, // unlimited
-  proExportLimit: 999999, // unlimited
-  businessRequestLimit: 999999, // unlimited
-  businessExportLimit: 999999, // unlimited
+  proRequestLimit: 100,
+  proExportLimit: 15,
+  businessRequestLimit: 300,
+  businessExportLimit: 100,
   features: {
     riskAnalysis: ["pro", "business"],
     strategyPlan: ["pro", "business"],
@@ -36,6 +36,35 @@ export const DEFAULT_PLAN_LIMITS: PlanLimits = {
     priorityProcessing: ["business"]
   }
 };
+
+export interface AuthoritativeCreditStatus {
+  allowed?: boolean;
+  remaining: number;
+  usedToday: number;
+  dailyLimit: number;
+  tier: SubscriptionTier;
+  nextResetTime?: string;
+  code?: string;
+}
+
+/**
+ * Fetch authoritative AI credit quota directly from backend GET /api/ai/credits.
+ */
+export async function getAuthoritativeAiCredits(): Promise<AuthoritativeCreditStatus | null> {
+  try {
+    const authHeaders = await getApiAuthorizationHeader();
+    const res = await fetch("/api/ai/credits", {
+      headers: { ...authHeaders }
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+    return null;
+  } catch (e) {
+    console.warn("[SubscriptionService] Failed to fetch authoritative AI credits:", e);
+    return null;
+  }
+}
 
 /**
  * Fetch global system limits defined by admins. Will fallback to defaults if not found.
@@ -67,7 +96,7 @@ export async function savePlanLimits(limits: PlanLimits): Promise<void> {
 
 /**
  * Check if the user is authorized to perform an AI Request based on their quota.
- * Automatically handles resetting counters if the day has changed.
+ * Authoritative AI quota is managed by backend /api/ai and GET /api/ai/credits.
  */
 export async function checkRequestQuota(userId: string): Promise<{ 
   allowed: boolean; 
@@ -75,7 +104,22 @@ export async function checkRequestQuota(userId: string): Promise<{
   limit: number; 
   remaining: number; 
 }> {
-  const todayStr = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD
+  // 1. Prefer authoritative credits from backend GET /api/ai/credits
+  try {
+    const creds = await getAuthoritativeAiCredits();
+    if (creds) {
+      return {
+        allowed: creds.allowed ?? (creds.remaining > 0),
+        requestsToday: creds.usedToday,
+        limit: creds.dailyLimit,
+        remaining: creds.remaining
+      };
+    }
+  } catch (e) {
+    console.warn("[SubscriptionService] Fallback to Firestore read for quota:", e);
+  }
+
+  // 2. Read-only fallback from user document (never mutate to avoid PERMISSION_DENIED)
   const userRef = doc(db, "users", userId);
   const userSnap = await getDoc(userRef);
   
@@ -84,58 +128,19 @@ export async function checkRequestQuota(userId: string): Promise<{
   }
   
   const userData = userSnap.data();
-  
-  // 1 & 2. Read and verify subscriptionTier directly from Firestore
   let verifiedTier: SubscriptionTier = "free";
   if (userData.subscriptionTier === "pro" || userData.subscriptionTier === "business") {
     verifiedTier = userData.subscriptionTier;
   }
   
   const limits = await getPlanLimits();
-  
-  // Decide limit based on tier
   let limit = limits.freeRequestLimit;
   if (verifiedTier === "pro") limit = limits.proRequestLimit;
   if (verifiedTier === "business") limit = limits.businessRequestLimit;
   
-  let requestsToday = userData.requestsToday || 0;
-  const lastResetDate = userData.lastRequestResetDate || "";
-  
-  if (lastResetDate !== todayStr) {
-    // New day: Reset request counters in database
-    try {
-      await updateDoc(userRef, {
-        requestsToday: 0,
-        lastRequestResetDate: todayStr
-      });
-      requestsToday = 0;
-    } catch (e) {
-      console.error("Error resetting request counter:", e);
-    }
-  }
-  
-  // 4. Pro and Business users must never see Premium paywall. This ensures they always bypass.
-  const isPremium = verifiedTier === "pro" || verifiedTier === "business";
+  const requestsToday = userData.aiCreditsUsedToday ?? userData.requestsToday ?? 0;
   const remaining = Math.max(0, limit - requestsToday);
-  const allowed = isPremium || limit === 999999 || remaining > 0;
-  
-  // 3. Premium paywall should only appear when: user is free AND user exceeded free limits OR tries to access premium feature
-  let paywallReason = "none";
-  if (!allowed) {
-    if (verifiedTier === "free" && requestsToday >= limit) {
-      paywallReason = "exceeded_requests_limit";
-    } else {
-      paywallReason = "premium_only_feature";
-    }
-  }
-
-  // 5. Add debug logging of: subscriptionTier, requestsToday, requestsLimit, paywallReason
-  console.log("[DEBUG SUBSCRIPTION SYSTEM][checkRequestQuota] Audit details:", {
-    subscriptionTier: verifiedTier,
-    requestsToday,
-    requestsLimit: limit,
-    paywallReason
-  });
+  const allowed = remaining > 0;
   
   return {
     allowed,
@@ -193,10 +198,10 @@ export async function checkExportQuota(userId: string): Promise<{
     }
   }
   
-  // 4. Pro and Business users must never see Premium paywall. This ensures they always bypass.
+  // Pro and Business users have higher finite export limits (15 and 100)
   const isPremium = verifiedTier === "pro" || verifiedTier === "business";
   const remaining = Math.max(0, limit - exportsToday);
-  const allowed = isPremium || limit === 999999 || remaining > 0;
+  const allowed = remaining > 0;
   
   let paywallReason = "none";
   if (!allowed) {
@@ -224,26 +229,12 @@ export async function checkExportQuota(userId: string): Promise<{
 }
 
 /**
- * Increment the user's AI requests count. Handles reset check atomically if the date has changed.
+ * Increment the user's AI requests count.
+ * Note: AI credits are authoritatively tracked and deducted server-side in POST /api/ai.
+ * This client helper is a safe no-op to prevent client-side PERMISSION_DENIED on privileged fields.
  */
-export async function incrementUserRequests(userId: string): Promise<void> {
-  const todayStr = new Date().toLocaleDateString("en-CA");
-  const userRef = doc(db, "users", userId);
-  const userSnap = await getDoc(userRef);
-  
-  if (!userSnap.exists()) return;
-  const userData = userSnap.data();
-  
-  if (userData.lastRequestResetDate !== todayStr) {
-    await updateDoc(userRef, {
-      requestsToday: 1,
-      lastRequestResetDate: todayStr
-    });
-  } else {
-    await updateDoc(userRef, {
-      requestsToday: increment(1)
-    });
-  }
+export async function incrementUserRequests(_userId: string): Promise<void> {
+  // Authoritative AI quota reservation and deduction is executed by POST /api/ai
 }
 
 /**
