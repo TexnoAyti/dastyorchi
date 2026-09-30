@@ -25,6 +25,7 @@ export interface DocumentEditorProps {
   content: string;
   onChange: (content: string) => any;
   title?: string;
+  onTitleChange?: (title: string) => void;
   templateId?: string;
   userRequest?: string;
   onBack?: () => void;
@@ -36,6 +37,7 @@ export const DocumentEditor = memo(function DocumentEditor({
   content,
   onChange,
   title = "Yuridik Hujjat",
+  onTitleChange,
   templateId,
   userRequest,
   onBack,
@@ -81,6 +83,7 @@ export const DocumentEditor = memo(function DocumentEditor({
       Image,
       TextAlign.configure({
         types: ["heading", "paragraph"],
+        alignments: ["left", "center", "right", "justify"],
       }),
     ],
     content: cleanAndValidateHTML(content),
@@ -90,8 +93,8 @@ export const DocumentEditor = memo(function DocumentEditor({
     editorProps: {
       attributes: {
         class: isMobile
-          ? "prose dark:prose-invert prose-base mx-auto focus:outline-none min-h-[calc(100vh-180px)] bg-transparent text-gray-900 dark:text-zinc-100 p-3 sm:p-4 shadow-none border-0 rounded-none break-words [overflow-wrap:anywhere] w-full leading-relaxed"
-          : "prose dark:prose-invert prose-sm sm:prose lg:prose-lg mx-auto focus:outline-none min-h-[800px] bg-white dark:bg-zinc-900 text-gray-900 dark:text-zinc-100 p-8 sm:p-12 shadow-md border border-gray-200/90 dark:border-zinc-800 rounded-sm break-words [overflow-wrap:anywhere] w-full leading-relaxed",
+          ? "word-editor-canvas mx-auto focus:outline-none min-h-[calc(100vh-180px)] bg-transparent text-gray-900 dark:text-zinc-100 p-3 sm:p-4 shadow-none border-0 rounded-none break-words [overflow-wrap:anywhere] w-full leading-relaxed"
+          : "word-editor-canvas mx-auto focus:outline-none min-h-[297mm] bg-white dark:bg-zinc-900 text-gray-900 dark:text-zinc-100 p-8 sm:p-12 md:p-16 shadow-xl border border-gray-300/90 dark:border-zinc-700 rounded-sm break-words [overflow-wrap:anywhere] w-full leading-relaxed",
       },
     },
   });
@@ -354,6 +357,10 @@ export const DocumentEditor = memo(function DocumentEditor({
     );
   }
 
+  const textContent = editor?.getText() || "";
+  const wordCount = textContent.trim() ? textContent.trim().split(/\s+/).length : 0;
+  const charCount = textContent.length;
+
   /* =========================================================================
    * PRESENTATION 2: DESKTOP MODE (>= 768px)
    * Word-like experience, A4 page view, centered, paper shadow, max-w-[210mm],
@@ -370,6 +377,12 @@ export const DocumentEditor = memo(function DocumentEditor({
         onExportPDF={exportPDF}
         onExportDOCX={exportDOCX}
         isExporting={isExporting}
+        title={title}
+        onTitleChange={onTitleChange}
+        saveStatus={saveStatus}
+        onManualSave={onManualSave}
+        wordCount={wordCount}
+        charCount={charCount}
       />
 
       {/* A4 Workspace View */}

@@ -67,16 +67,16 @@ service cloud.firestore {
 
       match /messages/{messageId} {
         allow create: if isSignedIn() && (
-          get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid || isAdmin()
+          (exists(/databases/$(database)/documents/chats/$(chatId)) && get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid) || isAdmin()
         );
         allow read, update, delete: if isSignedIn() && (
-          get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid || isAdmin()
+          (exists(/databases/$(database)/documents/chats/$(chatId)) && get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid) || isAdmin()
         );
       }
 
       match /{allSubcollections=**} {
         allow read, write: if isSignedIn() && (
-          get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid || isAdmin()
+          (exists(/databases/$(database)/documents/chats/$(chatId)) && get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid) || isAdmin()
         );
       }
     }

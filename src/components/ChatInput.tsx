@@ -1,73 +1,15 @@
-import React, { useState, useRef, useEffect, useImperativeHandle, forwardRef } from "react";
-import { Paperclip, X, Mic, MicOff, Send, FileText, Loader2 } from "lucide-react";
-import { Language } from "../types";
-import { extractRawText } from "mammoth";
-import * as pdfjsLib from "pdfjs-dist";
-import { safeStringToBase64Async } from "../utils/fileEncoding";
+import React, { useState, useRef, useEffect, useImperativeHandle, forwardRef, useCallback } from "react";
+import { Paperclip, X, Mic, MicOff, Send, FileText, Loader2, CheckCircle2, AlertCircle, RotateCw, Image as ImageIcon } from "lucide-react";
+import { Language, ChatAttachment, AttachmentStatus } from "../types";
 import { useViewport } from "../contexts/ViewportContext";
-
-// Standardize PDF.js worker CDN for inline extraction
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-
-function withTimeout<T>(promise: Promise<T>, ms: number, fallbackValue: T): Promise<T> {
-  let timer: any;
-  const timeoutPromise = new Promise<T>((resolve) => {
-    timer = setTimeout(() => {
-      console.warn(`[ChatInput] Task timed out after ${ms}ms`);
-      resolve(fallbackValue);
-    }, ms);
-  });
-  return Promise.race([
-    promise.then((res) => {
-      clearTimeout(timer);
-      return res;
-    }),
-    timeoutPromise
-  ]);
-}
-
-async function resizeImageIfNeeded(file: File, maxDim: number = 1400, quality: number = 0.8): Promise<string> {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        let { width, height } = img;
-        if (width <= maxDim && height <= maxDim && file.size < 1.5 * 1024 * 1024) {
-          resolve(e.target!.result as string);
-          return;
-        }
-        if (width > height) {
-          if (width > maxDim) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          }
-        } else {
-          if (height > maxDim) {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
-          }
-        }
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, width, height);
-          resolve(canvas.toDataURL("image/jpeg", quality));
-        } else {
-          resolve(e.target!.result as string);
-        }
-      };
-      img.onerror = () => {
-        resolve(e.target?.result as string || "");
-      };
-      img.src = e.target!.result as string;
-    };
-    reader.onerror = () => resolve("");
-    reader.readAsDataURL(file);
-  });
-}
+import { auth } from "../firebase";
+import {
+  validateAttachmentFile,
+  uploadAndProcessAttachment,
+  cancelAttachment,
+  getCachedFile,
+  removeAttachmentCache
+} from "../services/attachmentService";
 
 export interface ChatInputRef {
   setInputValue: (val: string) => void;
@@ -76,7 +18,7 @@ export interface ChatInputRef {
 }
 
 interface ChatInputProps {
-  onSubmit: (text: string, files: Array<{ name: string; type: string; data: string }>) => void;
+  onSubmit: (text: string, attachments: ChatAttachment[]) => void;
   isLoading: boolean;
   language: Language | "en";
   aiMode: "study" | "document";
@@ -99,9 +41,9 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
   const { keyboardHeight, isMobile } = useViewport();
   const [input, setInput] = useState("");
   const [isRecording, setIsRecording] = useState(false);
-  const [isProcessingFiles, setIsProcessingFiles] = useState(false);
-  const [selectedFiles, setSelectedFiles] = useState<Array<{ name: string; type: string; data: string }>>([]);
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [speechError, setSpeechError] = useState<string | null>(null);
+  const [generalError, setGeneralError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -113,7 +55,6 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
       setInput(val);
       if (textareaRef.current) {
         textareaRef.current.value = val;
-        // Adjust text area height
         textareaRef.current.style.height = "auto";
         const newHeight = Math.min(Math.max(textareaRef.current.scrollHeight, 44), 140);
         textareaRef.current.style.height = `${newHeight}px`;
@@ -124,7 +65,12 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
     },
     clear: () => {
       setInput("");
-      setSelectedFiles([]);
+      // Clean up active attachments
+      attachments.forEach(att => {
+        cancelAttachment(att.id, att.storagePath);
+        removeAttachmentCache(att.id);
+      });
+      setAttachments([]);
     }
   }));
 
@@ -151,12 +97,12 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
         recognitionRef.current.interimResults = true;
 
         recognitionRef.current.onresult = (event: any) => {
-          let currentTranscript = '';
+          let currentTranscript = "";
           for (let i = 0; i < event.results.length; ++i) {
             currentTranscript += event.results[i][0].transcript;
           }
           if (currentTranscript) {
-            const separator = previousInputRef.current && currentTranscript ? ' ' : '';
+            const separator = previousInputRef.current && currentTranscript ? " " : "";
             setInput(previousInputRef.current + separator + currentTranscript);
           }
         };
@@ -164,9 +110,9 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
         recognitionRef.current.onerror = (event: any) => {
           console.error("Speech recognition error in ChatInput", event.error);
           setIsRecording(false);
-          if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+          if (event.error === "not-allowed" || event.error === "service-not-allowed") {
             setSpeechError("Microphone access required");
-          } else if (event.error === 'no-speech') {
+          } else if (event.error === "no-speech") {
             setSpeechError("Try again");
           } else {
             setSpeechError("Voice recognition error");
@@ -181,15 +127,15 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
     }
   }, []);
 
-  // Update voice speech recognition language
+  // Update speech recognition language
   useEffect(() => {
     if (recognitionRef.current) {
       if (language === "uz_lat" || language === "uz_cyr") {
-        recognitionRef.current.lang = 'uz-UZ';
+        recognitionRef.current.lang = "uz-UZ";
       } else if (language === "ru") {
-        recognitionRef.current.lang = 'ru-RU';
+        recognitionRef.current.lang = "ru-RU";
       } else {
-        recognitionRef.current.lang = 'en-US';
+        recognitionRef.current.lang = "en-US";
       }
     }
   }, [language]);
@@ -216,7 +162,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
         setIsRecording(true);
       } catch (startErr: any) {
         console.error("Failed to start recognition", startErr);
-        if (startErr.name === 'InvalidStateError') {
+        if (startErr.name === "InvalidStateError") {
           setIsRecording(true);
         } else {
           setIsRecording(false);
@@ -227,158 +173,117 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
     }
   };
 
+  // Update or append attachment in state
+  const handleAttachmentUpdate = useCallback((updated: ChatAttachment) => {
+    setAttachments(prev => {
+      const idx = prev.findIndex(a => a.id === updated.id);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = updated;
+        return copy;
+      }
+      return [...prev, updated];
+    });
+  }, []);
+
+  // Handle file selection: Client validation -> Resumable upload -> Server processing
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    setIsProcessingFiles(true);
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      setGeneralError("Fayl yuklash uchun avval tizimga kiring.");
+      setTimeout(() => setGeneralError(null), 4000);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
 
-    try {
-      for (const file of Array.from(files)) {
-        // Enforce strict mobile memory budget (8MB) for Telegram WebApp stability
-        if (file.size > 8 * 1024 * 1024) {
-          alert(`${file.name}: Fayl hajmi 8MB dan oshmasligi kerak (Telegram mobil xotirasini tejash uchun).`);
-          continue;
-        }
-
-        if (file.name.endsWith('.doc')) {
-          alert("Eski .doc formati qo'llab-quvvatlanmaydi. Iltimos .docx yoki .pdf formatida yuklang.");
-          continue;
-        }
-
-        // Allow UI thread to breathe and render spinners
-        await new Promise((resolve) => setTimeout(resolve, 50));
-
-        if (file.name.endsWith('.docx') || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-          try {
-            const arrayBuffer = await file.arrayBuffer();
-            const docxPromise = (async () => {
-              const result = await extractRawText({ arrayBuffer });
-              return result.value || "";
-            })();
-            
-            const extractedText = await withTimeout(docxPromise, 6000, "");
-            const base64 = await safeStringToBase64Async(extractedText || "Hujjat matnini o'qib bo'lmadi.");
-            
-            setSelectedFiles(prev => [...prev, {
-              name: file.name,
-              type: 'text/plain',
-              data: `data:text/plain;base64,${base64}`
-            }]);
-          } catch (error) {
-            console.error("DOCX xatosi:", error);
-            alert(`${file.name} hujjatini o'qishda xatolik yuz berdi.`);
-          }
-        } else if (file.name.toLowerCase().endsWith('.pdf') || file.type === "application/pdf") {
-          try {
-            const arrayBuffer = await file.arrayBuffer();
-            
-            const pdfPromise = (async () => {
-              const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-              let textContent = "";
-              const maxPages = Math.min(pdf.numPages, 30);
-              for (let i = 1; i <= maxPages; i++) {
-                const page = await pdf.getPage(i);
-                const textObj = await page.getTextContent();
-                const pageText = textObj.items.map((item: any) => item.str).join(" ");
-                textContent += pageText + "\n";
-                if (i % 3 === 0) {
-                  await new Promise((r) => setTimeout(r, 5));
-                }
-              }
-              return textContent;
-            })();
-
-            const extractedContent = await withTimeout(pdfPromise, 8000, "");
-            
-            let finalContent = extractedContent;
-            const hasAlphaNumeric = /[a-zA-Z0-9\u0400-\u04FF]/.test(finalContent);
-            if (!finalContent.trim() || !hasAlphaNumeric) {
-              finalContent = "PDF contains no extractable text. OCR processing required.";
-            }
-            
-            const base64 = await safeStringToBase64Async(finalContent);
-            
-            setSelectedFiles(prev => [...prev, {
-              name: file.name,
-              type: 'text/plain',
-              data: `data:text/plain;base64,${base64}`
-            }]);
-          } catch (error) {
-            console.error("PDF xatosi:", error);
-            const base64Fail = await safeStringToBase64Async("PDF contains no extractable text. OCR processing required.");
-            setSelectedFiles(prev => [...prev, {
-              name: file.name,
-              type: 'text/plain',
-              data: `data:text/plain;base64,${base64Fail}`
-            }]);
-          }
-        } else if (file.type.startsWith("image/")) {
-          // Compress and downscale images to avoid mobile memory blowout
-          try {
-            const compressed = await withTimeout(resizeImageIfNeeded(file, 1400, 0.82), 6000, "");
-            if (compressed) {
-              setSelectedFiles(prev => [...prev, {
-                name: file.name,
-                type: 'image/jpeg',
-                data: compressed
-              }]);
-            }
-          } catch (imgErr) {
-            console.error("Rasm qayta ishlash xatosi:", imgErr);
-          }
-        } else {
-          // Standard text / file reader with timeout
-          try {
-            const readPromise = new Promise<string>((resolve) => {
-              const reader = new FileReader();
-              reader.onload = (event) => resolve((event.target?.result as string) || "");
-              reader.onerror = () => resolve("");
-              reader.readAsDataURL(file);
-            });
-            const resultData = await withTimeout(readPromise, 5000, "");
-            if (resultData) {
-              setSelectedFiles(prev => [...prev, {
-                name: file.name,
-                type: file.type || 'application/octet-stream',
-                data: resultData
-              }]);
-            }
-          } catch (readErr) {
-            console.error("Fayl o'qish xatosi:", readErr);
-          }
-        }
+    for (const file of Array.from(files)) {
+      // 1. Client-Side Defensive Validation (Limit 8MB, MIME, extension, reject .doc)
+      const validation = validateAttachmentFile(file);
+      if (!validation.valid) {
+        setGeneralError(`${file.name}: ${validation.error}`);
+        setTimeout(() => setGeneralError(null), 4500);
+        continue;
       }
-    } finally {
-      setIsProcessingFiles(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+
+      // 2. Start Resumable Upload and Server Processing Flow
+      uploadAndProcessAttachment(file, uid, undefined, handleAttachmentUpdate);
+    }
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
     }
   };
 
+  // Independent Cancellation of an Attachment
+  const handleCancelAttachment = (att: ChatAttachment) => {
+    cancelAttachment(att.id, att.storagePath);
+    setAttachments(prev => prev.filter(a => a.id !== att.id));
+    removeAttachmentCache(att.id);
+  };
+
+  // Independent Retry of a Failed Attachment
+  const handleRetryAttachment = (att: ChatAttachment) => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      setGeneralError("Fayl yuklash uchun avval tizimga kiring.");
+      setTimeout(() => setGeneralError(null), 4000);
+      return;
+    }
+
+    const file = getCachedFile(att.id);
+    if (!file) {
+      setGeneralError("Fayl topilmadi. Iltimos, qaytadan tanlang.");
+      setTimeout(() => setGeneralError(null), 3000);
+      return;
+    }
+
+    // Clean up previous storage if any
+    cancelAttachment(att.id, att.storagePath);
+
+    // Re-trigger upload & process with the same attachment id
+    uploadAndProcessAttachment(file, uid, att.id, handleAttachmentUpdate);
+  };
+
+  // Submit Handler: Only submit when attachments are ready
+  const hasInProgressAttachments = attachments.some(
+    a => a.status === "uploading" || a.status === "processing" || a.status === "validating"
+  );
+
+  const readyAttachments = attachments.filter(a => a.status === "ready");
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!input.trim() && selectedFiles.length === 0) || isLoading) return;
+    if ((!input.trim() && readyAttachments.length === 0) || isLoading || hasInProgressAttachments) {
+      return;
+    }
 
     if (isRecording) {
       recognitionRef.current?.stop();
       setIsRecording(false);
     }
 
-    onSubmit(input.trim(), selectedFiles);
+    onSubmit(input.trim(), readyAttachments);
     setInput("");
-    setSelectedFiles([]);
+    setAttachments([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e);
     }
+  };
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
   return (
@@ -388,61 +293,142 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
       }}
       className="p-3 sm:p-4 bg-white/40 dark:bg-zinc-900/60 backdrop-blur-md border-t border-white/40 dark:border-zinc-800 relative w-full min-w-0 shrink-0"
     >
-      {speechError && (
-        <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-red-500/90 text-white px-4 py-2 rounded-xl text-xs font-semibold shadow-xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2">
-          {speechError}
+      {/* Speech or General Error Tooltip */}
+      {(speechError || generalError) && (
+        <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-red-500/90 text-white px-4 py-2 rounded-xl text-xs font-semibold shadow-xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2 z-20 max-w-[90%] text-center">
+          {speechError || generalError}
         </div>
       )}
-      {selectedFiles.length > 0 && (
+
+      {/* Attachment Chips Display */}
+      {attachments.length > 0 && (
         <div className="flex gap-2 mb-3 overflow-x-auto pb-1 glass-scrollbar animate-in fade-in slide-in-from-bottom-1">
-          {selectedFiles.map((file, idx) => (
-            <div key={idx} className="flex items-center gap-1 bg-white/80 backdrop-blur-md border border-white/50 text-blue-900 px-3 py-1.5 rounded-xl text-xs whitespace-nowrap shadow-sm">
-              <Paperclip className="w-3 h-3 text-blue-500" />
-              <span className="truncate max-w-[120px] font-medium">{file.name}</span>
-              <button 
-                type="button" 
-                onClick={() => setSelectedFiles(prev => prev.filter((_, i) => i !== idx))} 
-                className="hover:text-red-500 ml-1 transition-colors"
+          {attachments.map((att) => {
+            const isImage = att.mimeType.startsWith("image/");
+            const isReady = att.status === "ready";
+            const isUploading = att.status === "uploading";
+            const isProcessing = att.status === "processing";
+            const isError = att.status === "error" || att.status === "cancelled";
+
+            return (
+              <div
+                key={att.id}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs whitespace-nowrap shadow-sm border transition-all ${
+                  isReady
+                    ? "bg-white/90 border-green-300 text-gray-800 dark:bg-zinc-800/90 dark:border-green-600/40 dark:text-zinc-200"
+                    : isError
+                    ? "bg-red-50 border-red-200 text-red-700 dark:bg-red-950/40 dark:border-red-800 dark:text-red-300"
+                    : "bg-blue-50/90 border-blue-200 text-blue-900 dark:bg-zinc-800/90 dark:border-blue-700/40 dark:text-blue-200"
+                }`}
               >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          ))}
+                {/* File Icon */}
+                {isImage ? (
+                  <ImageIcon className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                ) : (
+                  <FileText className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                )}
+
+                {/* File Name & Size */}
+                <span className="truncate max-w-[120px] font-medium" title={att.name}>
+                  {att.name}
+                </span>
+                <span className="text-[10px] text-gray-400 shrink-0">
+                  ({formatFileSize(att.size)})
+                </span>
+
+                {/* Status Indicator */}
+                {isUploading && (
+                  <div className="flex items-center gap-1 text-[11px] text-blue-600 font-semibold shrink-0">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <span>{att.progress}%</span>
+                  </div>
+                )}
+
+                {isProcessing && (
+                  <div className="flex items-center gap-1 text-[11px] text-amber-600 font-semibold shrink-0">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <span>Tahlil...</span>
+                  </div>
+                )}
+
+                {isReady && (
+                  <div className="flex items-center gap-1 text-[11px] text-emerald-600 font-semibold shrink-0">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                    <span>Tayyor</span>
+                  </div>
+                )}
+
+                {isError && (
+                  <div className="flex items-center gap-1 text-[11px] text-red-600 font-semibold shrink-0">
+                    <AlertCircle className="w-3.5 h-3.5 text-red-500" />
+                    <span title={att.errorMessage || "Xatolik"}>Xatolik</span>
+                    {/* Retry Button */}
+                    <button
+                      type="button"
+                      onClick={() => handleRetryAttachment(att)}
+                      title="Qayta urinish"
+                      className="p-0.5 hover:bg-red-100 rounded text-red-600 hover:text-red-800 transition-colors ml-1"
+                    >
+                      <RotateCw className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+
+                {/* Cancel / Remove Button */}
+                <button
+                  type="button"
+                  onClick={() => handleCancelAttachment(att)}
+                  className="hover:text-red-500 ml-1 transition-colors text-gray-400 p-0.5 rounded"
+                  title={isUploading || isProcessing ? "Bekor qilish" : "O'chirish"}
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
+
+      {/* Input Form */}
       <form onSubmit={handleSubmit} className="flex gap-1.5 sm:gap-2 items-end w-full min-w-0">
-        <input 
-          type="file" 
-          multiple 
-          className="hidden" 
-          ref={fileInputRef} 
-          onChange={handleFileSelect} 
-          accept="image/*,.pdf,.doc,.docx"
+        <input
+          type="file"
+          multiple
+          className="hidden"
+          ref={fileInputRef}
+          onChange={handleFileSelect}
+          accept="image/jpeg,image/png,image/webp,application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         />
+
+        {/* Paperclip Button */}
         <button
           type="button"
-          disabled={isProcessingFiles || isLoading}
+          disabled={hasInProgressAttachments || isLoading}
           onClick={() => fileInputRef.current?.click()}
           className="p-2.5 sm:p-3 min-w-[40px] sm:min-w-[44px] min-h-[44px] rounded-[16px] flex items-center justify-center transition-all bg-white/60 hover:bg-white/90 text-blue-600 shadow-sm border border-white/50 cursor-pointer shrink-0 disabled:opacity-50"
-          title={isProcessingFiles ? "Fayl qayta ishlanmoqda..." : "Fayl biriktirish"}
+          title={hasInProgressAttachments ? "Fayllar yuklanmoqda..." : "Fayl biriktirish (PDF, DOCX, Rasm)"}
         >
-          {isProcessingFiles ? (
+          {hasInProgressAttachments ? (
             <Loader2 className="w-4 sm:w-5 h-4 sm:h-5 animate-spin text-blue-600" />
           ) : (
             <Paperclip className="w-4 sm:w-5 h-4 sm:h-5" />
           )}
         </button>
+
+        {/* Voice Recording Button */}
         <button
           type="button"
           onClick={toggleRecording}
           className={`p-2.5 sm:p-3 min-w-[40px] sm:min-w-[44px] min-h-[44px] rounded-[16px] flex items-center justify-center transition-all shadow-sm border border-white/50 cursor-pointer shrink-0 ${
-            isRecording 
-              ? "bg-red-500 text-white shadow-[0_0_20px_rgba(239,68,68,0.5)] border-red-400" 
+            isRecording
+              ? "bg-red-500 text-white shadow-[0_0_20px_rgba(239,68,68,0.5)] border-red-400"
               : "bg-white/60 hover:bg-white/90 text-blue-600"
           }`}
         >
           {isRecording ? <MicOff className="w-4 sm:w-5 h-4 sm:h-5 animate-pulse" /> : <Mic className="w-4 sm:w-5 h-4 sm:h-5" />}
         </button>
+
+        {/* Text Input */}
         <textarea
           ref={textareaRef}
           rows={1}
@@ -452,18 +438,23 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
           onChange={(e) => setInput(e.target.value)}
           placeholder={isRecording ? "Listening..." : "Xabar yozing..."}
           className="flex-1 min-w-0 px-3 sm:px-4 py-2.5 sm:py-3 text-sm/relaxed bg-white/60 backdrop-blur-md border border-white/50 rounded-[20px] focus:ring-4 focus:ring-blue-500/20 focus:border-blue-500/50 outline-none resize-none overflow-y-auto glass-scrollbar shadow-inner text-gray-800 placeholder:text-gray-400 transition-all font-medium"
-          style={{ minHeight: '44px', maxHeight: '160px' }}
+          style={{ minHeight: "44px", maxHeight: "160px" }}
           disabled={isLoading}
           autoFocus
         />
+
+        {/* Send Button */}
         <button
           type="submit"
-          disabled={(!input.trim() && selectedFiles.length === 0) || isLoading}
+          disabled={(!input.trim() && readyAttachments.length === 0) || isLoading || hasInProgressAttachments}
           className="p-2.5 sm:p-3 min-w-[40px] sm:min-w-[44px] h-[44px] bg-blue-600 text-white rounded-[16px] hover:bg-blue-700 hover:shadow-lg hover:shadow-blue-600/30 transition-all disabled:opacity-50 flex items-center justify-center cursor-pointer shrink-0"
+          title={hasInProgressAttachments ? "Fayllar yuklanmoqda..." : "Yuborish"}
         >
           <Send className="w-4 sm:w-5 h-4 sm:h-5" />
         </button>
       </form>
+
+      {/* Document Generation Action in Document Mode */}
       {aiMode === "document" && (
         <div className="flex gap-2 mt-3 animate-in fade-in duration-500">
           <button

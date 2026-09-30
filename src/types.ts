@@ -138,12 +138,48 @@ export interface Document {
   createdAt: number;
 }
 
+export type AttachmentStatus =
+  | "validating"
+  | "uploading"
+  | "processing"
+  | "ready"
+  | "error"
+  | "cancelled";
+
+export type AttachmentProcessingMethod =
+  | "native_text"
+  | "docx_extract"
+  | "gemini_document"
+  | "gemini_vision"
+  | "ocr";
+
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  status: AttachmentStatus;
+  progress: number;
+  storagePath?: string;
+  downloadUrl?: string;
+  extractedText?: string;
+  processingMethod?: AttachmentProcessingMethod;
+  errorCode?: string;
+  errorMessage?: string;
+  metadata?: {
+    pageCount?: number;
+    charCount?: number;
+    truncated?: boolean;
+    originalLength?: number;
+  };
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   // Replaced base64 with cloud storage references to prevent 1MB document limit crashes
-  files?: { name: string; type: string; fileUrl: string; storagePath?: string }[]; 
+  files?: { name: string; type: string; fileUrl?: string; storagePath?: string; extractedText?: string }[]; 
   createdAt: number;
 }
 

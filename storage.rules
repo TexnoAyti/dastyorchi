@@ -1,16 +1,29 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    // User-scoped files: chats, cases, evidence, attachments, documents
+    // User-scoped chat attachments: strict 8MB limit and supported MIME types only (no .doc)
+    match /users/{userId}/chat-attachments/{attachmentId}/{fileName} {
+      allow read, delete: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && request.auth.uid == userId
+        && request.resource.size <= 8 * 1024 * 1024
+        && (
+          request.resource.contentType == 'application/pdf' ||
+          request.resource.contentType == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+          request.resource.contentType == 'image/jpeg' ||
+          request.resource.contentType == 'image/png' ||
+          request.resource.contentType == 'image/webp'
+        );
+    }
+
+    // User-scoped files: chats, cases, evidence, documents
     match /users/{userId}/{allPaths=**} {
       allow read: if request.auth != null && request.auth.uid == userId;
       allow write: if request.auth != null && request.auth.uid == userId
-        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.size <= 10 * 1024 * 1024
         && (
           request.resource.contentType.matches('image/.*') ||
           request.resource.contentType.matches('application/pdf') ||
           request.resource.contentType.matches('application/vnd.openxmlformats-officedocument.wordprocessingml.document') ||
-          request.resource.contentType.matches('application/msword') ||
           request.resource.contentType.matches('text/.*')
         );
       allow delete: if request.auth != null && request.auth.uid == userId;

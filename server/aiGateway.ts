@@ -453,8 +453,8 @@ export function resolveModel(
   requestedModel?: string,
   availableModels: string[] = []
 ): string {
-  const defaultFast = "gemini-2.5-flash";
-  const defaultStrong = "gemini-2.5-pro";
+  const defaultFast = "gemini-3.8-flash";
+  const defaultStrong = "gemini-3.1-pro-preview";
 
   const envFast = process.env.GEMINI_FAST_MODEL?.trim();
   const envStrong = process.env.GEMINI_STRONG_MODEL?.trim();
@@ -474,9 +474,9 @@ export function resolveModel(
       return envStrong;
     }
     const strongCandidates = [
-      "gemini-2.5-pro",
       "gemini-3.1-pro-preview",
-      "gemini-2.5-flash",
+      "gemini-3.8-flash",
+      "gemini-3.1-flash-lite",
       "gemini-flash-latest"
     ];
     for (const candidate of strongCandidates) {
@@ -490,10 +490,9 @@ export function resolveModel(
       return envFast;
     }
     const fastCandidates = [
-      "gemini-2.5-flash",
-      "gemini-flash-latest",
+      "gemini-3.8-flash",
       "gemini-3.1-flash-lite",
-      "gemini-2.5-pro"
+      "gemini-flash-latest"
     ];
     for (const candidate of fastCandidates) {
       if (availableModels.length === 0 || availableModels.includes(candidate)) {
@@ -517,8 +516,8 @@ export function getFallbackModelChain(
 
   const isStrongOp = operation === "reasoning" || operation === "document" || operation === "deep_analysis";
   const preferredPool = isStrongOp
-    ? ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-flash-latest"]
-    : ["gemini-2.5-flash", "gemini-flash-latest", "gemini-3.1-flash-lite", "gemini-2.5-pro"];
+    ? ["gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"]
+    : ["gemini-3.8-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
 
   for (const candidate of preferredPool) {
     if (!chain.includes(candidate)) {
@@ -530,7 +529,7 @@ export function getFallbackModelChain(
 
   // Ensure chain contains at least 2 models
   if (chain.length === 1) {
-    const backup = isStrongOp ? "gemini-2.5-flash" : "gemini-2.5-pro";
+    const backup = isStrongOp ? "gemini-3.1-flash-lite" : "gemini-3.8-flash";
     if (!chain.includes(backup)) {
       chain.push(backup);
     }
@@ -545,7 +544,7 @@ export function getFallbackModelChain(
  * safety blocks, and malformed client payloads.
  *
  * CRITICAL: Do NOT classify generic strings like "models/" as model unavailable,
- * as Gemini standard URLs include "models/". Only match 404 or explicit model-not-found / unsupported errors.
+ * as Gemini standard URLs include "models/". Only match 404, 503, or explicit model-not-found / unsupported errors.
  */
 export function isModelUnavailableError(error: any): boolean {
   if (!error) return false;
@@ -580,13 +579,19 @@ export function isModelUnavailableError(error: any): boolean {
     return false;
   }
 
-  // Genuine model availability / not found / unsupported patterns:
-  // Must be 404 or explicitly state model is not found, not supported, or unavailable
+  // Genuine model availability / not found / unsupported / temporary high-demand (503) patterns:
   return (
     status === 404 ||
+    status === 503 ||
+    errMsg.includes("503") ||
+    errMsg.includes("high demand") ||
+    errMsg.includes("overloaded") ||
+    errMsg.includes("temporarily unavailable") ||
+    errMsg.includes("service unavailable") ||
     errMsg.includes("not found for api version") ||
     errMsg.includes("model not found") ||
     errMsg.includes("is not found") ||
+    errMsg.includes("no longer available") ||
     (errMsg.includes("model") && (
       errMsg.includes("not supported") ||
       errMsg.includes("is unavailable") ||

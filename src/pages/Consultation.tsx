@@ -1,12 +1,11 @@
 import { useState, useRef, useEffect } from "react";
-import { extractRawText } from "mammoth";
 import { motion } from "framer-motion";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { signOut } from "firebase/auth";
-import { Send, Bot, User, Scale, AlertCircle, Mic, MicOff, FileText, Download, TrendingUp, X, Plus, MessageSquare, Paperclip, ListChecks, Ghost, Briefcase, ChevronDown, CheckCircle, Lock, AlertTriangle, LogOut, Settings, LayoutDashboard, Crown, Volume2, VolumeX, Bell, History, Zap, Trash2 } from "lucide-react";
+import { Send, Bot, User, Scale, AlertCircle, Mic, MicOff, FileText, Download, TrendingUp, X, Plus, MessageSquare, Paperclip, ListChecks, Ghost, Briefcase, ChevronDown, CheckCircle, Lock, AlertTriangle, LogOut, Settings, LayoutDashboard, Crown, Volume2, VolumeX, Bell, History, Zap, Trash2, Loader2 } from "lucide-react";
 import html2pdf from "html2pdf.js";
 import { chatWithLawyer, generateHTMLDocument, generateChatTitle, AIServerError } from "../services/aiService";
-import { Language, RiskAnalysis, Case, PersonProfile, ChatSession, ChatMessage } from "../types";
+import { Language, RiskAnalysis, Case, PersonProfile, ChatSession, ChatMessage, ChatAttachment } from "../types";
 import Markdown from "react-markdown";
 import { DocumentEditor } from "../components/DocumentEditor";
 import { ChatInput, ChatInputRef } from "../components/ChatInput";
@@ -26,6 +25,8 @@ import { errorLogger } from "../services/errorLoggingService";
 import { getFriendlyErrorMessage } from "../utils/errorFriendly";
 import { useLanguage } from "../contexts/LanguageContext";
 import { useViewport } from "../contexts/ViewportContext";
+import { useAuth } from "../contexts/AuthContext";
+import { cn } from "../lib/utils";
 import { ResponsiveModal } from "../components/common/ResponsivePrimitives";
 
 const LOCAL_TRANSLATIONS: Record<string, Record<string, string>> = {
@@ -494,14 +495,33 @@ export function Consultation({ user }: { user: any }) {
   const [selectedCaseId, setSelectedCaseId] = useState<string>("");
   const [selectedProfileIds, setSelectedProfileIds] = useState<string[]>([]);
   
-  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
-  const [currentChatId, setCurrentChatId] = useState<string | null>(() => {
-    if (queryChatId) {
-      localStorage.setItem("activeChatId", queryChatId);
-      return queryChatId;
+  const { uid: authUid } = useAuth();
+  const effectiveUid = authUid || user?.uid || auth.currentUser?.uid || null;
+
+  const [docSaveStatus, setDocSaveStatus] = useState<"saved" | "saving" | "unsaved" | "error">("saved");
+  const saveDebounceTimer = useRef<any>(null);
+  const [pendingWritesCount, setPendingWritesCount] = useState(0);
+  const [isQueueFlushing, setIsQueueFlushing] = useState(false);
+
+  useEffect(() => {
+    if (!effectiveUid) return;
+    const unsub = chatPersistenceQueue.subscribe(effectiveUid, (count, flushing) => {
+      setPendingWritesCount(count);
+      setIsQueueFlushing(flushing);
+    });
+    return unsub;
+  }, [effectiveUid]);
+
+  const handleRetrySync = () => {
+    if (effectiveUid) {
+      chatPersistenceQueue.flushPendingWrites(effectiveUid).catch((err) => {
+        console.warn("[Consultation] Manual queue flush error:", err);
+      });
     }
-    return localStorage.getItem("activeChatId");
-  });
+  };
+
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -828,23 +848,22 @@ export function Consultation({ user }: { user: any }) {
 
   // Flush retry queue on user authentication
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (uid) {
-      chatPersistenceQueue.flushPendingWrites(uid).catch((err) => {
+    if (effectiveUid) {
+      chatPersistenceQueue.flushPendingWrites(effectiveUid).catch((err) => {
         console.warn("[Consultation] Initial queue flush notice:", err);
       });
     }
-  }, [auth.currentUser?.uid]);
+  }, [effectiveUid]);
 
+  // Load chat history & restore active chat session
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) return;
+    if (!effectiveUid) return;
     
     let isFirstLoad = true;
     
     const chatsQuery = query(
       collection(db, "chats"), 
-      where("userId", "==", uid),
+      where("userId", "==", effectiveUid),
       orderBy("updatedAt", "desc"),
       limit(50)
     );
@@ -856,50 +875,49 @@ export function Consultation({ user }: { user: any }) {
       const sessions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ChatSession));
       setChatSessions(sessions);
       
-      const targetChatId = queryChatId || (uid ? localStorage.getItem(`activeChatId_${uid}`) : null) || localStorage.getItem("activeChatId");
-      if (!targetChatId && !hasCompletedInit.current) {
+      if (!hasCompletedInit.current) {
         performanceTracker.endChatInit();
         hasCompletedInit.current = true;
       }
-      
-      if (targetChatId) {
-        const activeSession = sessions.find(s => s.id === targetChatId);
-        if (activeSession) {
-          setCurrentChatId(targetChatId);
-          setLanguage(activeSession.language);
-          if (activeSession.messages && activeSession.messages.length > 0) {
-             setMessages(activeSession.messages);
-          }
-          if (queryChatId) {
-            localStorage.setItem(`activeChatId_${uid}`, queryChatId);
-            localStorage.setItem("activeChatId", queryChatId);
-            setSearchParams({}, { replace: true });
-          }
-        } else if (sessions.length > 0) {
-          const mostRecent = sessions[0];
-          localStorage.setItem(`activeChatId_${uid}`, mostRecent.id);
-          localStorage.setItem("activeChatId", mostRecent.id);
-          setCurrentChatId(mostRecent.id);
-          setLanguage(mostRecent.language);
-          if (mostRecent.messages && mostRecent.messages.length > 0) {
-             setMessages(mostRecent.messages);
+
+      if (isFirstLoad) {
+        isFirstLoad = false;
+        const targetChatId = queryChatId || localStorage.getItem(`activeChatId_${effectiveUid}`) || localStorage.getItem("activeChatId");
+        
+        if (targetChatId) {
+          const matched = sessions.find(s => s.id === targetChatId && s.userId === effectiveUid);
+          if (matched) {
+            setCurrentChatId(matched.id);
+            localStorage.setItem(`activeChatId_${effectiveUid}`, matched.id);
+            setLanguage(matched.language || "uz_lat");
+            const chatMode = (matched as any).aiMode || (matched as any).mode || "study";
+            setAiMode(chatMode);
+            const chatDoc = (matched as any).document || "";
+            if (chatDoc) {
+              setDocumentContent(chatDoc);
+              if (chatMode === "document") setEditorOpen(true);
+            }
+            if (queryChatId) {
+              setSearchParams({}, { replace: true });
+            }
+          } else {
+            // Stale active chat ID that no longer exists or belongs to another user: clear it and show welcome
+            localStorage.removeItem(`activeChatId_${effectiveUid}`);
+            localStorage.removeItem("activeChatId");
+            setCurrentChatId(null);
+            setMessages([
+              {
+                id: "welcome",
+                role: "assistant",
+                content: lt.welcome,
+                createdAt: Date.now()
+              }
+            ]);
           }
         } else {
-          localStorage.removeItem(`activeChatId_${uid}`);
-          localStorage.removeItem("activeChatId");
           setCurrentChatId(null);
         }
-      } else if (isFirstLoad && sessions.length > 0) {
-        const mostRecent = sessions[0];
-        localStorage.setItem(`activeChatId_${uid}`, mostRecent.id);
-        localStorage.setItem("activeChatId", mostRecent.id);
-        setCurrentChatId(mostRecent.id);
-        setLanguage(mostRecent.language);
-        if (mostRecent.messages && mostRecent.messages.length > 0) {
-           setMessages(mostRecent.messages);
-        }
       }
-      isFirstLoad = false;
     }, (error: any) => {
       if (error?.code === "permission-denied" || error?.message?.includes("insufficient permissions")) {
         console.warn("Chats query notice: Permissions syncing or unauthenticated in Firestore.", error?.message || error);
@@ -913,12 +931,18 @@ export function Consultation({ user }: { user: any }) {
       performanceTracker.trackListenerInactive("Consultation_chatsQuery");
       console.log("[Firestore] listener detached: Consultation Chat Sessions");
     };
-  }, [auth.currentUser?.uid]);
+  }, [effectiveUid]);
 
-  // Fetch messages subcollection optimally matching scalable chat patterns
+  // Fetch messages subcollection for active chat
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!currentChatId || isPrivateMode || !uid) return;
+    if (!currentChatId || isPrivateMode || !effectiveUid) return;
+
+    // Safety check: ensure chat is in user's sessions to avoid querying unowned or non-existent chats
+    const isKnownSession = chatSessions.some(s => s.id === currentChatId && s.userId === effectiveUid);
+    if (!isKnownSession) {
+      // Chat document might still be committing; do not query until parent exists
+      return;
+    }
     
     const messagesQuery = query(
       collection(db, "chats", currentChatId, "messages"),
@@ -939,21 +963,51 @@ export function Consultation({ user }: { user: any }) {
         } else if (!createdAt) {
           createdAt = Date.now();
         }
-        return { id: doc.id, ...data, createdAt } as ChatMessage;
+        return {
+          id: doc.id,
+          role: data.role,
+          content: data.content,
+          createdAt,
+          files: data.files,
+          ...(data.isError ? { isError: true } : {})
+        } as ChatMessage;
       });
+
       if (subMessages.length > 0) {
-        setMessages(subMessages);
+        setMessages(prev => {
+          const serverIds = new Set(subMessages.map(m => m.id));
+          const pendingOptimistic = prev.filter(m => !serverIds.has(m.id) && m.role === "user" && m.id !== "1" && m.id !== "welcome");
+          return [...subMessages, ...pendingOptimistic];
+        });
+      } else {
+        setMessages([
+          {
+            id: "welcome",
+            role: "assistant",
+            content: lt.welcome,
+            createdAt: Date.now()
+          }
+        ]);
       }
+
       if (!hasCompletedInit.current) {
         performanceTracker.endChatInit();
         hasCompletedInit.current = true;
       }
-    }, (error) => {
-      console.warn("Messages stream subscription warn:", error);
-      try {
-        handleFirestoreError(error, OperationType.LIST, `chats/${currentChatId}/messages`);
-      } catch (e) {
-        console.warn("[Consultation] Logged firestore subscription error:", e);
+    }, (error: any) => {
+      const isPermissionDenied = error?.code === "permission-denied" || error?.message?.includes("insufficient permissions");
+      if (isPermissionDenied) {
+        console.warn(`[Consultation] Messages query permission notice on chats/${currentChatId}/messages:`, error?.message || error);
+        localStorage.removeItem(`activeChatId_${effectiveUid}`);
+        localStorage.removeItem("activeChatId");
+        setCurrentChatId(null);
+      } else {
+        console.warn("Messages stream subscription warn:", error);
+        try {
+          handleFirestoreError(error, OperationType.LIST, `chats/${currentChatId}/messages`);
+        } catch (e) {
+          console.warn("[Consultation] Logged firestore subscription error:", e);
+        }
       }
     });
 
@@ -962,7 +1016,7 @@ export function Consultation({ user }: { user: any }) {
       performanceTracker.trackListenerInactive(`Consultation_messagesQuery_${currentChatId}`);
       console.log("[Firestore] listener detached: Consultation Chat Messages");
     };
-  }, [currentChatId, isPrivateMode, auth.currentUser?.uid]);
+  }, [currentChatId, isPrivateMode, effectiveUid, chatSessions]);
 
   const handleLanguageChange = (newLang: Language | "en") => {
     setLanguage(newLang);
@@ -996,14 +1050,13 @@ export function Consultation({ user }: { user: any }) {
   const startNewChat = () => {
     pendingChatCreationRef.current = null;
     setCurrentChatId(null);
-    const uid = auth.currentUser?.uid;
-    if (uid) {
-      localStorage.removeItem(`activeChatId_${uid}`);
+    if (effectiveUid) {
+      localStorage.removeItem(`activeChatId_${effectiveUid}`);
     }
     localStorage.removeItem("activeChatId");
     setMessages([
       {
-        id: (Date.now() + Math.random()).toString(),
+        id: "welcome",
         role: "assistant",
         content: lt.welcome,
         createdAt: Date.now()
@@ -1011,41 +1064,59 @@ export function Consultation({ user }: { user: any }) {
     ]);
     setDocumentContent("");
     setAiMode("study");
+    setEditorOpen(false);
     setAnalysis({ proceduralReadiness: 0, riskLevel: "", strengths: [], weaknesses: [], risk: "", strategy: "", expertise: "" });
   };
 
-  const handleDocumentChange = async (newContent: string) => {
+  const handleDocumentChange = (newContent: string) => {
     setDocumentContent(newContent);
-    if (currentChatId && !isPrivateMode) {
-      try {
-        await updateDoc(doc(db, "chats", currentChatId), {
-          document: newContent,
-          updatedAt: serverTimestamp()
-        });
-      } catch (error: any) {
-        console.error("Faylni saqlashda xatolik:", error);
-        alert(`Signature save failed during 'save' step. Error details: ${error.message || error}`);
-        throw error;
-      }
+    setDocSaveStatus("unsaved");
+    if (currentChatId && !isPrivateMode && effectiveUid) {
+      if (saveDebounceTimer.current) clearTimeout(saveDebounceTimer.current);
+      saveDebounceTimer.current = setTimeout(async () => {
+        try {
+          setDocSaveStatus("saving");
+          await updateDoc(doc(db, "chats", currentChatId), {
+            document: newContent,
+            updatedAt: serverTimestamp()
+          });
+          setDocSaveStatus("saved");
+        } catch (error: any) {
+          console.warn("[Document] auto-save error:", error?.message || error);
+          setDocSaveStatus("error");
+        }
+      }, 1000);
+    }
+  };
+
+  const handleDocumentManualSave = async () => {
+    if (!currentChatId || isPrivateMode || !effectiveUid) return;
+    setDocSaveStatus("saving");
+    try {
+      await updateDoc(doc(db, "chats", currentChatId), {
+        document: documentContent,
+        updatedAt: serverTimestamp()
+      });
+      setDocSaveStatus("saved");
+    } catch (err: any) {
+      console.warn("[Document] manual save error:", err?.message || err);
+      setDocSaveStatus("error");
     }
   };
 
   const openChat = (chat: ChatSession) => {
     pendingChatCreationRef.current = null;
     setCurrentChatId(chat.id);
-    const uid = auth.currentUser?.uid;
-    if (uid) {
-      localStorage.setItem(`activeChatId_${uid}`, chat.id);
+    if (effectiveUid) {
+      localStorage.setItem(`activeChatId_${effectiveUid}`, chat.id);
     }
     localStorage.setItem("activeChatId", chat.id);
-    // Explicitly set messages from this chat to avoid cross-chat bleeding
-    setMessages(chat.messages && chat.messages.length > 0 ? chat.messages : []);
-    setLanguage(chat.language);
-    localStorage.setItem("preferredLanguage", chat.language);
+    setLanguage(chat.language || "uz_lat");
+    localStorage.setItem("preferredLanguage", chat.language || "uz_lat");
     
     // Load saved document and metadata from the chat session
-    const chatDoc = chat.document || "";
-    const chatMode = (chat as any).aiMode || "study";
+    const chatDoc = (chat as any).document || "";
+    const chatMode = (chat as any).aiMode || (chat as any).mode || "study";
 
     if (chatMode === "study") {
       setAiMode("study");
@@ -1092,19 +1163,30 @@ export function Consultation({ user }: { user: any }) {
     const confirmMsg = language === "ru" 
       ? "Вы уверены, что хотите удалить этот чат?" 
       : "Haqiqatan ham bu suhbatni o'chirmoqchimisiz?";
-    if (!window.confirm(confirmMsg)) {
-      return;
-    }
 
-    try {
-      await deleteDoc(doc(db, "chats", chatId));
-      if (currentChatId === chatId) {
-        startNewChat();
+    const performDelete = async () => {
+      try {
+        await deleteDoc(doc(db, "chats", chatId));
+        if (currentChatId === chatId) {
+          startNewChat();
+        }
+        setChatSessions(prev => prev.filter(c => c.id !== chatId));
+      } catch (err: any) {
+        console.error("[Consultation] Failed to delete chat:", err);
       }
-      setChatSessions(prev => prev.filter(c => c.id !== chatId));
-    } catch (err: any) {
-      console.error("[Consultation] Failed to delete chat:", err);
-      alert(language === "ru" ? "Ошибка при удалении чата" : "Suhbatni o'chirishda xatolik yuz berdi.");
+    };
+
+    const tg = (window as any).Telegram?.WebApp;
+    if (tg?.showConfirm) {
+      tg.showConfirm(confirmMsg, (confirmed: boolean) => {
+        if (confirmed) {
+          performDelete();
+        }
+      });
+    } else {
+      if (typeof window !== "undefined" && window.confirm(confirmMsg)) {
+        performDelete();
+      }
     }
   };
 
@@ -1147,22 +1229,38 @@ export function Consultation({ user }: { user: any }) {
     userId: string;
     chatId: string;
     message: ChatMessage;
-    filesToSend: Array<{ name: string; type: string; data: string }>;
+    filesToSend: Array<{ name: string; type: string; fileUrl?: string; storagePath?: string; data?: string; extractedText?: string }>;
+    chatTitle?: string;
+    language: Language;
+    aiMode: "study" | "document";
+    isNew?: boolean;
   }) => {
     try {
+      // 1. Ensure parent chat document is committed first so message rule passes
+      const chatDocRef = doc(db, "chats", params.chatId);
+      const chatData: Record<string, any> = {
+        userId: params.userId,
+        title: params.chatTitle || params.message.content.slice(0, 32) || "Yangi suhbat",
+        mode: params.aiMode,
+        aiMode: params.aiMode,
+        language: params.language,
+        preview: params.message.content.slice(0, 100),
+        updatedAt: serverTimestamp(),
+      };
+      if (params.isNew) {
+        chatData.createdAt = serverTimestamp();
+      }
+      await setDoc(chatDocRef, cleanFirestoreData(chatData), { merge: true });
+
+      // 2. Persist user message in subcollection
       const dbSafeUserMessage: any = { ...params.message };
       if (params.filesToSend && params.filesToSend.length > 0) {
-        try {
-          const uploadedFiles = await Promise.all(params.filesToSend.map(async (file) => {
-            const { fileUrl, storagePath } = await uploadChatFile(params.userId, params.chatId, file.name, file.data);
-            return { name: file.name, type: file.type, fileUrl, storagePath };
-          }));
-          dbSafeUserMessage.files = uploadedFiles;
-        } catch (uploadError: any) {
-          if (uploadError?.message !== "Storage_Not_Configured") {
-            console.warn("[Chat Persistence] Non-blocking file upload skipped:", uploadError?.message || uploadError);
-          }
-        }
+        dbSafeUserMessage.files = params.filesToSend.map(f => ({
+          name: f.name,
+          type: f.type,
+          fileUrl: f.fileUrl || "",
+          storagePath: f.storagePath || ""
+        }));
       }
 
       await setDoc(doc(db, "chats", params.chatId, "messages", params.message.id), cleanFirestoreData({
@@ -1171,6 +1269,14 @@ export function Consultation({ user }: { user: any }) {
       }), { merge: true });
 
       console.log(`[Chat Persistence] User message ${params.message.id} saved in chats/${params.chatId}`);
+
+      if (params.isNew) {
+        generateChatTitle(params.message.content, params.language).then((title) => {
+          if (title && params.chatId) {
+            updateDoc(doc(db, "chats", params.chatId), { title }).catch(() => {});
+          }
+        }).catch(() => {});
+      }
     } catch (err: any) {
       console.warn("[Chat Persistence] User message immediate save failed, queuing retry:", err);
       chatPersistenceQueue.enqueuePendingWrite({
@@ -1183,6 +1289,11 @@ export function Consultation({ user }: { user: any }) {
           content: params.message.content,
           createdAt: params.message.createdAt,
           files: params.message.files?.map(f => ({ name: f.name, type: f.type }))
+        },
+        chatMeta: {
+          title: params.chatTitle,
+          language: params.language,
+          aiMode: params.aiMode
         }
       });
     }
@@ -1197,14 +1308,13 @@ export function Consultation({ user }: { user: any }) {
     isDocument: boolean;
   }) => {
     try {
-      await setDoc(doc(db, "chats", params.chatId, "messages", params.assistantMessage.id), cleanFirestoreData({
-        ...params.assistantMessage,
-        createdAt: serverTimestamp()
-      }), { merge: true });
-
+      // 1. Ensure parent chat is updated
       const updateData: any = {
+        userId: params.userId,
         updatedAt: serverTimestamp(),
-        aiMode: params.aiMode
+        mode: params.aiMode,
+        aiMode: params.aiMode,
+        preview: (params.response?.content || params.assistantMessage.content || "").slice(0, 100)
       };
       if (params.isDocument && params.response?.content) updateData.document = params.response.content;
       if (params.response?.analysis?.proceduralReadiness != null) updateData.proceduralReadiness = params.response.analysis.proceduralReadiness;
@@ -1215,7 +1325,14 @@ export function Consultation({ user }: { user: any }) {
       if (params.response?.analysis?.strategy) updateData.strategy = params.response.analysis.strategy;
       if (params.response?.analysis?.expertise) updateData.expertise = params.response.analysis.expertise;
 
-      await updateDoc(doc(db, "chats", params.chatId), updateData);
+      await setDoc(doc(db, "chats", params.chatId), cleanFirestoreData(updateData), { merge: true });
+
+      // 2. Persist assistant message in subcollection
+      await setDoc(doc(db, "chats", params.chatId, "messages", params.assistantMessage.id), cleanFirestoreData({
+        ...params.assistantMessage,
+        createdAt: serverTimestamp()
+      }), { merge: true });
+
       console.log(`[Chat Persistence] Assistant message ${params.assistantMessage.id} & chat updated`);
     } catch (err: any) {
       console.warn("[Chat Persistence] Assistant message save failed, queuing retry:", err);
@@ -1238,60 +1355,59 @@ export function Consultation({ user }: { user: any }) {
     }
   };
 
-  const handleSubmit = async (text: string, files: Array<{ name: string; type: string; data: string }>) => {
-    if ((!text.trim() && files.length === 0) || isLoading) return;
+  const handleSubmit = async (text: string, incomingAttachments: ChatAttachment[] = []) => {
+    if ((!text.trim() && incomingAttachments.length === 0) || isLoading) return;
 
     console.log("[Chat Send] submit started");
 
-    const userMessage: any = {
+    const messageFiles = incomingAttachments.map(att => ({
+      name: att.name,
+      type: att.mimeType,
+      fileUrl: att.downloadUrl || "",
+      storagePath: att.storagePath || "",
+      extractedText: att.extractedText
+    }));
+
+    const userMessage: ChatMessage = {
       id: (Date.now() + Math.random()).toString(),
       role: "user",
       content: text.trim(),
+      files: messageFiles.length > 0 ? messageFiles : undefined,
       createdAt: Date.now()
     };
-    
-    // UI state message gets base64 to display immediately
-    if (files.length > 0) {
-      userMessage.files = files.map(f => ({ ...f, data: f.data }));
-    }
 
     setMessages(prev => [...prev, userMessage]);
     console.log("[Chat Send] local message added");
     
-    const filesToSend = [...files];
+    const filesToSend = messageFiles;
     setIsLoading(true);
     setRetryMessage("");
 
-    const uid = auth.currentUser?.uid;
+    const uid = effectiveUid;
     let activeChatId = currentChatId;
+    let isNewChat = false;
 
     // STEP 0 — ENSURE ACTIVE CHAT ID & INITIAL DOC IF NEW CHAT
     if (!activeChatId && uid && !isPrivateMode) {
       const newChatDocRef = doc(collection(db, "chats"));
       activeChatId = newChatDocRef.id;
+      isNewChat = true;
       setCurrentChatId(activeChatId);
       localStorage.setItem(`activeChatId_${uid}`, activeChatId);
       localStorage.setItem("activeChatId", activeChatId);
-
-      const tempTitle = userMessage.content.slice(0, 32) + (userMessage.content.length > 32 ? "..." : "");
-      setDoc(newChatDocRef, cleanFirestoreData({
-        userId: uid,
-        title: tempTitle || "Yangi suhbat",
-        language,
-        isPrivate: false,
-        isBusinessMode,
-        aiMode,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      })).then(() => {
-        generateChatTitle(userMessage.content, language).then((title) => {
-          if (title && activeChatId) {
-            updateDoc(doc(db, "chats", activeChatId), { title }).catch(() => {});
-          }
-        }).catch(() => {});
-      }).catch((err) => {
-        console.warn("[Chat] Initial parent chat setDoc notice:", err);
-      });
+      setChatSessions(prev => [
+        {
+          id: activeChatId!,
+          userId: uid,
+          title: userMessage.content.slice(0, 32) || "Yangi suhbat",
+          mode: aiMode,
+          aiMode: aiMode,
+          language,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        } as ChatSession,
+        ...prev
+      ]);
     }
 
     // PERSIST USER MESSAGE IMMEDIATELY IN BACKGROUND (NON-BLOCKING)
@@ -1300,7 +1416,11 @@ export function Consultation({ user }: { user: any }) {
         userId: uid,
         chatId: activeChatId,
         message: userMessage,
-        filesToSend
+        filesToSend,
+        chatTitle: userMessage.content.slice(0, 32) + (userMessage.content.length > 32 ? "..." : ""),
+        language,
+        aiMode,
+        isNew: isNewChat
       });
     }
 
@@ -1930,6 +2050,30 @@ export function Consultation({ user }: { user: any }) {
             </div>
           </div>
 
+          {/* Persistence Unsynced / Flushing Indicator */}
+          {pendingWritesCount > 0 && (
+            <div className="mx-4 mt-2 mb-1 px-3 py-2 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 rounded-xl border border-amber-200 dark:border-amber-900/60 flex items-center justify-between text-xs animate-in fade-in shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <Loader2 className={cn("w-3.5 h-3.5 shrink-0", isQueueFlushing ? "animate-spin text-blue-600" : "text-amber-600")} />
+                <span className="truncate">
+                  {isQueueFlushing
+                    ? (language === "ru" ? "Синхронизация сообщений..." : "Sinxronlanmoqda...")
+                    : (language === "ru" 
+                        ? `${pendingWritesCount} сообщений не сохранены` 
+                        : `${pendingWritesCount} ta xabar hali saqlanmagan`)}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleRetrySync}
+                disabled={isQueueFlushing}
+                className="px-2.5 py-1 bg-amber-100 hover:bg-amber-200 dark:bg-amber-900/40 dark:hover:bg-amber-900/70 text-amber-900 dark:text-amber-100 rounded-lg font-bold text-xs shrink-0 cursor-pointer disabled:opacity-50 transition-colors ml-2"
+              >
+                {language === "ru" ? "Повторить" : "Qayta urinish"}
+              </button>
+            </div>
+          )}
+
         <div className="flex-1 overflow-y-auto p-5 space-y-6 glass-scrollbar">
           {/* Study Components (Only render when mode is "study" and messages are few) */}
           {aiMode === "study" && messages.length <= 1 && (
@@ -2100,10 +2244,16 @@ export function Consultation({ user }: { user: any }) {
             <DocumentEditor 
               content={documentContent || ""} 
               onChange={handleDocumentChange} 
-              title={chatSessions.find(s => s.id === currentChatId)?.title || "Hujjat"}
+              title={chatSessions.find(s => s.id === currentChatId)?.title || "Yuridik Hujjat"}
+              onTitleChange={(newTitle) => {
+                if (currentChatId && effectiveUid) {
+                  updateDoc(doc(db, "chats", currentChatId), { title: newTitle }).catch(() => {});
+                }
+              }}
+              saveStatus={docSaveStatus}
+              onManualSave={handleDocumentManualSave}
               userRequest={messages.find(m => m.role === "user")?.content || ""}
               onBack={() => setEditorOpen(false)}
-              saveStatus="saved"
             />
           </div>
         )}
@@ -2124,43 +2274,42 @@ export function Consultation({ user }: { user: any }) {
         {/* Right Panel: Editor / Risk Analyzer (Desktop only) */}
         {!isMobile && aiMode === "document" && editorOpen && (
           <div 
-            className="w-full h-full lg:relative lg:inset-auto lg:z-30 lg:w-[60%] lg:flex-1 flex flex-col bg-white/40 backdrop-blur-[24px] lg:rounded-[32px] border border-white/50 shadow-[0_8px_40px_rgba(0,0,0,0.04)] overflow-y-auto glass-scrollbar min-h-0 p-4 sm:p-6 lg:p-8 transition-all duration-300 animate-in fade-in slide-in-from-right-5"
-            style={{ minHeight: "600px", display: "flex", flexDirection: "column", visibility: "visible", opacity: 1 }}
+            className="w-full h-full lg:relative lg:inset-auto lg:z-30 lg:w-[60%] lg:flex-1 flex flex-col bg-white/40 backdrop-blur-[24px] lg:rounded-[32px] border border-white/50 shadow-[0_8px_40px_rgba(0,0,0,0.04)] overflow-hidden min-h-0 p-3 sm:p-4 lg:p-5 transition-all duration-300 animate-in fade-in slide-from-right-5"
+            style={{ minHeight: "600px", display: "flex", flexDirection: "column" }}
           >
-            {/* Top bar */}
-            <div className="flex justify-between items-center mb-6 bg-white/40 p-2 rounded-2xl backdrop-blur-md shadow-sm border border-white/50">
-              <h2 className="text-base sm:text-lg font-bold text-gray-800 ml-2 sm:ml-4 tracking-tight">Hujjat Muharriri</h2>
-              <div className="flex items-center gap-2 mr-1">
-                <button 
-                  onClick={downloadAll} 
-                  className="flex items-center gap-1.5 px-3 py-2 bg-gradient-to-r from-gray-900 to-gray-800 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md hover:shadow-lg hover:shadow-gray-900/20 transition-all whitespace-nowrap"
-                  title="Barcha natijalarni PDF shaklida yuklab olish"
-                >
-                  <Download className="w-4 h-4" />
-                  <span className="hidden sm:inline">PDF Yuklash</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setEditorOpen(false)}
-                  className="flex items-center gap-1.5 px-3 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-xl text-xs sm:text-sm font-bold shadow-sm transition-all border border-red-200 whitespace-nowrap cursor-pointer"
-                  title="Hujjat muharririni vaqtincha yopish"
-                >
-                  <X className="w-4 h-4" />
-                  <span>Yopish</span>
-                </button>
-              </div>
+            {/* Top Close bar */}
+            <div className="flex justify-between items-center mb-2 px-3 py-1.5 bg-white/60 dark:bg-zinc-800/60 rounded-xl backdrop-blur-md shadow-2xs border border-white/60 dark:border-zinc-700/60 shrink-0">
+              <span className="text-xs font-bold text-gray-700 dark:text-zinc-300">
+                Hujjat Muharriri (Word formati)
+              </span>
+              <button
+                type="button"
+                onClick={() => setEditorOpen(false)}
+                className="flex items-center gap-1.5 px-3 py-1 bg-red-50 hover:bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300 rounded-lg text-xs font-bold transition-all border border-red-200/80 dark:border-red-900/60 whitespace-nowrap cursor-pointer"
+                title="Hujjat muharririni vaqtincha yopish"
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>Yopish</span>
+              </button>
             </div>
 
             {/* Document Editor Area */}
             <div 
-              className="flex-1 min-h-[450px] bg-white/50 backdrop-blur-md border border-white/50 shadow-inner rounded-[24px] overflow-hidden glass-scrollbar relative mb-4 flex flex-col"
-              style={{ minHeight: "450px", display: "flex", flexDirection: "column", visibility: "visible", opacity: 1 }}
+              className="flex-1 min-h-[480px] rounded-2xl overflow-hidden relative flex flex-col shadow-inner"
             >
               <DocumentEditor 
                 content={documentContent || ""} 
                 onChange={handleDocumentChange} 
-                title={chatSessions.find(s => s.id === currentChatId)?.title || "Hujjat"}
+                title={chatSessions.find(s => s.id === currentChatId)?.title || "Yuridik Hujjat"}
+                onTitleChange={(newTitle) => {
+                  if (currentChatId && effectiveUid) {
+                    updateDoc(doc(db, "chats", currentChatId), { title: newTitle }).catch(() => {});
+                  }
+                }}
+                saveStatus={docSaveStatus}
+                onManualSave={handleDocumentManualSave}
                 userRequest={messages.find(m => m.role === "user")?.content || ""}
+                onBack={() => setEditorOpen(false)}
               />
             </div>
 

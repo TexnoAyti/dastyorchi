@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import HTMLtoDOCX from "html-to-docx";
+import mammoth from "mammoth";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import admin from "firebase-admin";
@@ -28,8 +29,13 @@ import {
   getUserCreditStatus,
   getAiAnalytics,
   ReservationResult,
-  isProductionEnvironment
+  isProductionEnvironment,
+  getFirestoreAdminAuthorized,
+  setFirestoreAdminAuthorized,
+  isCredentialOrPermissionError
 } from "./aiGateway";
+
+const aiRequestMemoryCache = new Map<string, any>();
 
 dotenv.config();
 
@@ -121,6 +127,7 @@ function parseAndValidateServiceAccount(rawEnv: string | undefined): ParsedServi
 const configPath = path.join(process.cwd(), "firebase-applet-config.json");
 let expectedFrontendProjectId: string | undefined = process.env.FIREBASE_PROJECT_ID?.trim();
 let configuredDatabaseId: string | undefined = process.env.FIRESTORE_DATABASE_ID?.trim();
+let expectedFrontendStorageBucket: string | undefined = process.env.FIREBASE_STORAGE_BUCKET?.trim();
 
 if (fs.existsSync(configPath)) {
   try {
@@ -130,6 +137,9 @@ if (fs.existsSync(configPath)) {
     }
     if (!configuredDatabaseId && cfg.firestoreDatabaseId) {
       configuredDatabaseId = cfg.firestoreDatabaseId.trim();
+    }
+    if (!expectedFrontendStorageBucket && cfg.storageBucket) {
+      expectedFrontendStorageBucket = cfg.storageBucket.trim();
     }
   } catch (e) {}
 }
@@ -177,7 +187,8 @@ try {
       } else {
         adminApp = admin.initializeApp({
           credential: admin.credential.cert(sa.data),
-          projectId: sa.data.project_id
+          projectId: sa.data.project_id,
+          storageBucket: expectedFrontendStorageBucket || "dastyorchi.firebasestorage.app"
         });
       }
 
@@ -232,7 +243,10 @@ try {
       const devProjectId = expectedFrontendProjectId || process.env.FIREBASE_PROJECT_ID?.trim() || "dastyorchi";
       if (!adminApp && admin.apps.length === 0 && devProjectId) {
         try {
-          adminApp = admin.initializeApp({ projectId: devProjectId });
+          adminApp = admin.initializeApp({
+            projectId: devProjectId,
+            storageBucket: expectedFrontendStorageBucket || "dastyorchi.firebasestorage.app"
+          });
           if (configuredDatabaseId && configuredDatabaseId !== "(default)") {
             dbAdmin = getFirestore(adminApp, configuredDatabaseId);
           } else {
@@ -1039,14 +1053,18 @@ apiRouter.get("/auth/session", async (req, res) => {
     const { uid } = verified.payload;
     let userProfile = null;
 
-    if (dbAdmin) {
+    if (dbAdmin && getFirestoreAdminAuthorized() !== false) {
       try {
         const snap = await dbAdmin.collection("users").doc(uid).get();
         if (snap.exists) {
           userProfile = snap.data();
         }
       } catch (e: any) {
-        console.warn("Error reading session user profile from Firestore Admin:", e.message);
+        if (isCredentialOrPermissionError(e)) {
+          setFirestoreAdminAuthorized(false);
+        } else {
+          console.warn("Error reading session user profile from Firestore Admin:", e.message);
+        }
       }
     }
 
@@ -1059,9 +1077,27 @@ apiRouter.get("/auth/session", async (req, res) => {
       };
     }
 
+    let firebaseCustomToken: string | null = null;
+    if (admin.apps.length > 0 && firebaseAdminState.credentialMode === "service_account_cert") {
+      try {
+        const customClaims: Record<string, any> = {
+          telegramId: verified.payload.telegramId,
+          role: userProfile.role || "user"
+        };
+        if (userProfile.role === "admin" || userProfile.admin === true) {
+          customClaims.role = "admin";
+          customClaims.admin = true;
+        }
+        firebaseCustomToken = await admin.auth().createCustomToken(uid, customClaims);
+      } catch (tErr: any) {
+        console.warn("[Session] Could not generate firebaseCustomToken:", tErr.message);
+      }
+    }
+
     return res.json({
       valid: true,
-      user: userProfile
+      user: userProfile,
+      firebaseCustomToken
     });
   } catch (err: any) {
     return res.status(500).json({ error: "Sessiyani tekshirishda xatolik yuz berdi" });
@@ -1391,6 +1427,405 @@ apiRouter.post("/admin/payment-action", async (req, res) => {
   }
 });
 
+// Helper: Safely limit and summarize overly large extracted text
+function limitExtractedAttachmentText(rawText: string, maxChars: number = 60000): {
+  text: string;
+  truncated: boolean;
+  originalLength: number;
+} {
+  const originalLength = rawText.length;
+  if (originalLength <= maxChars) {
+    return { text: rawText.trim(), truncated: false, originalLength };
+  }
+  const headChars = Math.floor(maxChars * 0.6); // 36,000 characters
+  const tailChars = Math.floor(maxChars * 0.35); // 21,000 characters
+  const head = rawText.slice(0, headChars);
+  const tail = rawText.slice(-tailChars);
+  const notice = `\n\n[... DIQQAT: Hujjat hajmi o'ta yirik (${originalLength} belgi) bo'lganligi sababli ixchamlashtirildi. Asosiy bo'limlar (${headChars} belgi) va yakuniy rekvizitlar (${tailChars} belgi) to'liq saqlab qolindi ...]\n\n`;
+  return {
+    text: `${head}${notice}${tail}`.trim(),
+    truncated: true,
+    originalLength
+  };
+}
+
+// ------------------------------------------
+// POST /attachments/process - Server Attachment Normalization & OCR Endpoint
+// ------------------------------------------
+apiRouter.post("/attachments/process", async (req, res) => {
+  console.log("[Attachments] Process request received");
+  
+  // 1. Authoritative Request Authentication
+  const authInspection = await authenticateRequestDetails(req);
+  if (!authInspection.userId) {
+    const isExpired = authInspection.sessionFailReason === "expired";
+    return res.status(401).json({
+      success: false,
+      errorCode: isExpired ? "SESSION_EXPIRED" : "AUTH_REQUIRED",
+      errorMessage: isExpired ? "Sessiya muddati tugagan" : "Avtorizatsiya talab qilinadi"
+    });
+  }
+  const userId = authInspection.userId;
+
+  // 2. Validate Request Body
+  const { attachmentId, storagePath, mimeType, name, downloadUrl } = req.body || {};
+  if (!attachmentId || typeof attachmentId !== "string" || !storagePath || typeof storagePath !== "string") {
+    return res.status(400).json({
+      success: false,
+      errorCode: "INVALID_REQUEST",
+      errorMessage: "attachmentId va storagePath kiritilishi shart."
+    });
+  }
+
+  // 3. Validate Storage Path Security (Must belong to authenticated user, no traversal)
+  if (storagePath.includes("..") || storagePath.includes("//") || storagePath.includes("\\")) {
+    return res.status(403).json({
+      success: false,
+      errorCode: "STORAGE_PATH_FORBIDDEN",
+      errorMessage: "Yaroqsiz storage path formati."
+    });
+  }
+
+  const expectedPrefix = `users/${userId}/chat-attachments/${attachmentId}/`;
+  if (!storagePath.startsWith(expectedPrefix)) {
+    console.warn(`[Attachments] Storage path forbidden: user=${userId}, path=${storagePath}, expectedPrefix=${expectedPrefix}`);
+    return res.status(403).json({
+      success: false,
+      errorCode: "STORAGE_PATH_FORBIDDEN",
+      errorMessage: "Ushbu faylga ruxsat berilmagan."
+    });
+  }
+
+  // 4. Validate MIME Type defensively
+  const allowedMimes = [
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "image/jpeg",
+    "image/png",
+    "image/webp"
+  ];
+  const normalizedMime = (mimeType || "").toLowerCase().trim();
+  const lowerName = (name || "").toLowerCase();
+
+  // Explicitly reject .doc format
+  if (lowerName.endsWith(".doc") || normalizedMime === "application/msword") {
+    return res.status(400).json({
+      success: false,
+      errorCode: "UNSUPPORTED_MIME_TYPE",
+      errorMessage: "Eski .doc formati qo'llab-quvvatlanmaydi. Iltimos .docx yoki .pdf formatida yuklang."
+    });
+  }
+
+  if (!allowedMimes.includes(normalizedMime)) {
+    return res.status(400).json({
+      success: false,
+      errorCode: "UNSUPPORTED_MIME_TYPE",
+      errorMessage: "Faqat PDF, DOCX va rasmlar (JPEG, PNG, WebP) qo'llab-quvvatlanadi."
+    });
+  }
+
+  // 5. Memory-efficient download from Firebase Storage (<= 8MB limit)
+  let fileBuffer: Buffer | null = null;
+  let fileSize = 0;
+
+  if (admin.apps.length > 0) {
+    try {
+      const bucketName = process.env.FIREBASE_STORAGE_BUCKET || expectedFrontendStorageBucket || "dastyorchi.firebasestorage.app";
+      const bucket = admin.storage().bucket(bucketName);
+      const fileRef = bucket.file(storagePath);
+      const [exists] = await fileRef.exists();
+      if (exists) {
+        const [metadata] = await fileRef.getMetadata();
+        fileSize = Number(metadata.size) || 0;
+        if (fileSize > 8 * 1024 * 1024) {
+          return res.status(400).json({
+            success: false,
+            errorCode: "FILE_TOO_LARGE",
+            errorMessage: "Fayl hajmi 8MB dan oshmasligi kerak."
+          });
+        }
+        const [buf] = await fileRef.download();
+        fileBuffer = buf;
+      }
+    } catch (storageErr: any) {
+      console.warn("[Attachments] Firebase Admin Storage download notice:", storageErr.message);
+    }
+  }
+
+  // Fallback: If Admin SDK couldn't download directly (e.g. dev fallback without storage IAM permissions)
+  // and downloadUrl was provided, securely verify and fetch
+  if (!fileBuffer && downloadUrl && typeof downloadUrl === "string") {
+    try {
+      const parsedUrl = new URL(downloadUrl);
+      const isFirebaseHost = (
+        parsedUrl.hostname === "firebasestorage.googleapis.com" ||
+        parsedUrl.hostname.endsWith(".firebasestorage.app") ||
+        parsedUrl.hostname === "storage.googleapis.com"
+      );
+      const decodedPath = decodeURIComponent(parsedUrl.pathname);
+      if (isFirebaseHost && decodedPath.includes(storagePath)) {
+        const response = await fetch(downloadUrl);
+        if (response.ok) {
+          const ab = await response.arrayBuffer();
+          if (ab.byteLength > 8 * 1024 * 1024) {
+            return res.status(400).json({
+              success: false,
+              errorCode: "FILE_TOO_LARGE",
+              errorMessage: "Fayl hajmi 8MB dan oshmasligi kerak."
+            });
+          }
+          fileBuffer = Buffer.from(ab);
+          fileSize = fileBuffer.length;
+        }
+      }
+    } catch (fetchErr: any) {
+      console.warn("[Attachments] Fallback downloadUrl fetch failed:", fetchErr.message);
+    }
+  }
+
+  if (!fileBuffer || fileBuffer.length === 0) {
+    return res.status(404).json({
+      success: false,
+      errorCode: "ATTACHMENT_NOT_FOUND",
+      errorMessage: "Fayl serverga yuklanmagan yoki topilmadi."
+    });
+  }
+
+  // 6. Extract/Normalize Based on File Type
+  try {
+    // CASE A: DOCX extraction via Mammoth
+    if (
+      normalizedMime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      lowerName.endsWith(".docx")
+    ) {
+      let rawText = "";
+      try {
+        const docxResult = await mammoth.extractRawText({ buffer: fileBuffer });
+        rawText = (docxResult.value || "").trim();
+        if (!rawText) {
+          rawText = "DOCX hujjatida matn aniqlanmadi.";
+        }
+      } catch (docxErr: any) {
+        console.error("[Attachments] DOCX extraction error:", docxErr.message);
+        return res.status(500).json({
+          success: false,
+          errorCode: "ATTACHMENT_PROCESSING_FAILED",
+          errorMessage: "DOCX hujjatini qayta ishlashda xatolik yuz berdi."
+        });
+      }
+
+      const limited = limitExtractedAttachmentText(rawText);
+      return res.json({
+        success: true,
+        attachment: {
+          id: attachmentId,
+          name: name || "document.docx",
+          mimeType: normalizedMime,
+          size: fileSize,
+          status: "ready",
+          processingMethod: "docx_extract",
+          text: limited.text,
+          metadata: {
+            charCount: limited.text.length,
+            truncated: limited.truncated,
+            originalLength: limited.originalLength
+          }
+        }
+      });
+    }
+
+    // Server-side Authoritative GEMINI API Key Check for Multimodal / PDF / Vision
+    const apiKey = process.env.GEMINI_API_KEY?.trim() || "";
+    if (!apiKey || apiKey === "MY_GEMINI_API_KEY" || apiKey === "your_real_key_here") {
+      return res.status(503).json({
+        success: false,
+        errorCode: "AI_CONFIGURATION_ERROR",
+        errorMessage: "Serverda Gemini API sozlanmagan (GEMINI_API_KEY mavjud emas)."
+      });
+    }
+
+    const genAI = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          "User-Agent": "dastyorchi-attachment-processor"
+        }
+      }
+    });
+
+    const availableModels = await discoverAvailableModels(apiKey);
+
+    // CASE B: PDF Processing via Gemini Document Capability
+    if (normalizedMime === "application/pdf" || lowerName.endsWith(".pdf")) {
+      const targetModel = resolveModel("file_analysis", undefined, availableModels);
+      const modelChain = getFallbackModelChain(targetModel, "file_analysis", availableModels);
+
+      const promptText = `Siz professional yuridik tahlilchisiz. Taqdim etilgan ushbu PDF hujjatning (matnli yoki skanerlangan bo'lishidan qat'i nazar) to'liq matnini va yuridik jihatdan ahamiyatli bo'lgan barcha ma'lumotlarini aniq ajratib bering.
+- Barcha sahifalardagi matnlarni ketma-ketlikda to'liq o'qing.
+- Hujjat turi, sanasi, raqami, tomonlar/shaxslar, shartnoma yoki da'vo predmeti, summalar va majburiyatlarni alohida aniq ko'rsating.
+- Agar hujjat skanerlangan bo'lsa, OCR qilib matnni maksimal aniqlikda o'qing.
+- Asossiz taxminlar qilmang. O'qib bo'lmagan so'zlarni [o'qib bo'lmadi] deb belgilang.
+- Faqat hujjatning haqiqiy mazmunini qaytaring.`;
+
+      const pdfBase64 = fileBuffer.toString("base64");
+      let rawText = "";
+      let lastModelError: any = null;
+
+      for (const modelCandidate of modelChain) {
+        try {
+          const response = await genAI.models.generateContent({
+            model: modelCandidate,
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: "application/pdf",
+                      data: pdfBase64
+                    }
+                  },
+                  {
+                    text: promptText
+                  }
+                ]
+              }
+            ],
+            config: {
+              temperature: 0.1
+            }
+          });
+          rawText = (response.text || "").trim();
+          if (rawText) break;
+        } catch (mErr: any) {
+          lastModelError = mErr;
+          console.warn(`[Attachments] Gemini PDF extraction model candidate ${modelCandidate} failed:`, mErr.message);
+        }
+      }
+
+      if (!rawText) {
+        console.error("[Attachments] Gemini PDF understanding returned empty:", lastModelError?.message);
+        return res.status(500).json({
+          success: false,
+          errorCode: "ATTACHMENT_PROCESSING_FAILED",
+          errorMessage: "PDF hujjatini tahlil qilishda xatolik yuz berdi."
+        });
+      }
+
+      const limited = limitExtractedAttachmentText(rawText);
+      return res.json({
+        success: true,
+        attachment: {
+          id: attachmentId,
+          name: name || "document.pdf",
+          mimeType: normalizedMime,
+          size: fileSize,
+          status: "ready",
+          processingMethod: "gemini_document",
+          text: limited.text,
+          metadata: {
+            charCount: limited.text.length,
+            truncated: limited.truncated,
+            originalLength: limited.originalLength
+          }
+        }
+      });
+    }
+
+    // CASE C: Images (JPEG, PNG, WebP) via Gemini Vision / OCR
+    if (normalizedMime.startsWith("image/")) {
+      const targetModel = resolveModel("file_analysis", undefined, availableModels);
+      const modelChain = getFallbackModelChain(targetModel, "file_analysis", availableModels);
+
+      const promptText = `Siz professional yuridik ekspert va hujjatlar bo'yicha tahlilchisiz. Ushbu tasvirdagi barcha ko'rinadigan matnni to'liq va aniq o'qib bering (OCR).
+Muhim yuridik elementlarni ajratib ko'rsating:
+- Hujjat turi (shartnoma, chek, ariza, tilxat, dalolatnoma, fotosurat va h.k.)
+- Tomonlar / Shaxslar / Tashkilotlar
+- Sanalar va muddatlar
+- Summala va rekvizitlar
+- Asosiy mazmun va bandlar
+Matnni o'zbek tilida tartibli va tushunarli qilib taqdim eting. Hech qanday ma'lumot to'qib chiqarmang.`;
+
+      const imgBase64 = fileBuffer.toString("base64");
+      let rawText = "";
+      let lastModelError: any = null;
+
+      for (const modelCandidate of modelChain) {
+        try {
+          const response = await genAI.models.generateContent({
+            model: modelCandidate,
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: normalizedMime,
+                      data: imgBase64
+                    }
+                  },
+                  {
+                    text: promptText
+                  }
+                ]
+              }
+            ],
+            config: {
+              temperature: 0.1
+            }
+          });
+          rawText = (response.text || "").trim();
+          if (rawText) break;
+        } catch (mErr: any) {
+          lastModelError = mErr;
+          console.warn(`[Attachments] Gemini image OCR model candidate ${modelCandidate} failed:`, mErr.message);
+        }
+      }
+
+      if (!rawText) {
+        console.error("[Attachments] Gemini image OCR returned empty:", lastModelError?.message);
+        return res.status(500).json({
+          success: false,
+          errorCode: "ATTACHMENT_PROCESSING_FAILED",
+          errorMessage: "Tasvirni tahlil qilishda xatolik yuz berdi."
+        });
+      }
+
+      const limited = limitExtractedAttachmentText(rawText);
+      return res.json({
+        success: true,
+        attachment: {
+          id: attachmentId,
+          name: name || "image.jpg",
+          mimeType: normalizedMime,
+          size: fileSize,
+          status: "ready",
+          processingMethod: "gemini_vision",
+          text: limited.text,
+          metadata: {
+            charCount: limited.text.length,
+            truncated: limited.truncated,
+            originalLength: limited.originalLength
+          }
+        }
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      errorCode: "UNSUPPORTED_MIME_TYPE",
+      errorMessage: "Qo'llab-quvvatlanmaydigan fayl turi."
+    });
+  } catch (procErr: any) {
+    console.error("[Attachments] Processing exception:", procErr.message);
+    return res.status(500).json({
+      success: false,
+      errorCode: "ATTACHMENT_PROCESSING_FAILED",
+      errorMessage: "Faylni qayta ishlashda kutilmagan xatolik yuz berdi."
+    });
+  }
+});
+
 // ------------------------------------------
 // POST /ai - Centralized Production AI Gateway
 // ------------------------------------------
@@ -1436,18 +1871,31 @@ apiRouter.post("/ai", async (req, res) => {
   }
 
   // Idempotency: Return cached response if this clientRequestId was already completed for this user
-  if (clientRequestId && typeof clientRequestId === "string" && dbAdmin) {
-    try {
-      const existingReq = await dbAdmin.collection("ai_requests").doc(clientRequestId).get();
-      if (existingReq.exists) {
-        const reqData = existingReq.data() || {};
-        if (reqData.userId === userId && reqData.status === "completed" && reqData.response) {
-          console.log(`[AI Gateway] Idempotent cache hit for clientRequestId=${clientRequestId}`);
-          return res.json(reqData.response);
+  if (clientRequestId && typeof clientRequestId === "string") {
+    const memoryHit = aiRequestMemoryCache.get(clientRequestId);
+    if (memoryHit && memoryHit.userId === userId && memoryHit.status === "completed" && memoryHit.response) {
+      console.log(`[AI Gateway] Idempotent cache hit (memory) for clientRequestId=${clientRequestId}`);
+      return res.json(memoryHit.response);
+    }
+
+    if (dbAdmin && getFirestoreAdminAuthorized() !== false) {
+      try {
+        const existingReq = await dbAdmin.collection("ai_requests").doc(clientRequestId).get();
+        if (existingReq.exists) {
+          const reqData = existingReq.data() || {};
+          if (reqData.userId === userId && reqData.status === "completed" && reqData.response) {
+            console.log(`[AI Gateway] Idempotent cache hit (firestore) for clientRequestId=${clientRequestId}`);
+            aiRequestMemoryCache.set(clientRequestId, reqData);
+            return res.json(reqData.response);
+          }
+        }
+      } catch (e: any) {
+        if (isCredentialOrPermissionError(e)) {
+          setFirestoreAdminAuthorized(false);
+        } else {
+          console.warn("[AI Gateway] ai_requests lookup error:", e.message);
         }
       }
-    } catch (e: any) {
-      console.warn("[AI Gateway] ai_requests lookup error:", e.message);
     }
   }
 
@@ -1699,18 +2147,38 @@ apiRouter.post("/ai", async (req, res) => {
       model: successfulModel
     };
 
-    if (clientRequestId && typeof clientRequestId === "string" && dbAdmin) {
-      try {
-        await dbAdmin.collection("ai_requests").doc(clientRequestId).set({
-          clientRequestId,
-          userId,
-          operation,
-          status: "completed",
-          response: responsePayload,
-          createdAt: new Date().toISOString()
-        }, { merge: true });
-      } catch (cacheErr: any) {
-        console.warn("[AI Gateway] Error caching ai_requests:", cacheErr.message);
+    if (clientRequestId && typeof clientRequestId === "string") {
+      aiRequestMemoryCache.set(clientRequestId, {
+        clientRequestId,
+        userId,
+        operation,
+        status: "completed",
+        response: responsePayload,
+        createdAt: new Date().toISOString()
+      });
+
+      if (aiRequestMemoryCache.size > 500) {
+        const oldestKey = aiRequestMemoryCache.keys().next().value;
+        if (oldestKey) aiRequestMemoryCache.delete(oldestKey);
+      }
+
+      if (dbAdmin && getFirestoreAdminAuthorized() !== false) {
+        try {
+          await dbAdmin.collection("ai_requests").doc(clientRequestId).set({
+            clientRequestId,
+            userId,
+            operation,
+            status: "completed",
+            response: responsePayload,
+            createdAt: new Date().toISOString()
+          }, { merge: true });
+        } catch (cacheErr: any) {
+          if (isCredentialOrPermissionError(cacheErr)) {
+            setFirestoreAdminAuthorized(false);
+          } else {
+            console.warn("[AI Gateway] Error caching ai_requests:", cacheErr.message);
+          }
+        }
       }
     }
 

@@ -129,6 +129,52 @@ export function EditorMoreSheet({
               <Heading3 className="w-5 h-5" />
               <span className="text-xs">Sarlavha 3</span>
             </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                editor.chain().focus().toggleStrike().run();
+                onClose();
+              }}
+              className={cn(
+                "p-3 rounded-xl border flex flex-col items-center justify-center gap-1.5 transition-all min-h-[56px] cursor-pointer",
+                editor.isActive("strike")
+                  ? "bg-blue-50 border-blue-200 dark:bg-blue-950/40 dark:border-blue-800 text-blue-700 dark:text-blue-300 font-bold"
+                  : "bg-gray-50/70 border-gray-200/80 dark:bg-zinc-800/60 dark:border-zinc-700/60 text-gray-800 dark:text-zinc-200"
+              )}
+            >
+              <span className="text-sm font-bold line-through">S</span>
+              <span className="text-xs">Chizilgan</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                editor.chain().focus().toggleBlockquote().run();
+                onClose();
+              }}
+              className={cn(
+                "p-3 rounded-xl border flex flex-col items-center justify-center gap-1.5 transition-all min-h-[56px] cursor-pointer",
+                editor.isActive("blockquote")
+                  ? "bg-blue-50 border-blue-200 dark:bg-blue-950/40 dark:border-blue-800 text-blue-700 dark:text-blue-300 font-bold"
+                  : "bg-gray-50/70 border-gray-200/80 dark:bg-zinc-800/60 dark:border-zinc-700/60 text-gray-800 dark:text-zinc-200"
+              )}
+            >
+              <span className="text-base font-serif italic">&ldquo;&rdquo;</span>
+              <span className="text-xs">Iqtibos</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                editor.chain().focus().setHorizontalRule().run();
+                onClose();
+              }}
+              className="p-3 rounded-xl border border-gray-200/80 dark:border-zinc-700/60 bg-gray-50/70 dark:bg-zinc-800/60 text-gray-800 dark:text-zinc-200 flex flex-col items-center justify-center gap-1.5 transition-all min-h-[56px] cursor-pointer"
+            >
+              <div className="w-6 h-0.5 bg-gray-400 dark:bg-zinc-500 rounded" />
+              <span className="text-xs">Chiziq</span>
+            </button>
           </div>
         </div>
 

@@ -11,6 +11,7 @@ import {
   AlignLeft,
   AlignCenter,
   AlignRight,
+  AlignJustify,
   MoreHorizontal,
 } from "lucide-react";
 import { cn } from "@/src/lib/utils";
@@ -28,11 +29,13 @@ export function MobileEditorToolbar({
 }: MobileEditorToolbarProps) {
   if (!editor) return null;
 
-  // Alignment cycling helper
+  // Alignment cycling helper (left -> center -> right -> justify -> left)
   const handleAlignToggle = () => {
     if (editor.isActive({ textAlign: "center" })) {
       editor.chain().focus().setTextAlign("right").run();
     } else if (editor.isActive({ textAlign: "right" })) {
+      editor.chain().focus().setTextAlign("justify").run();
+    } else if (editor.isActive({ textAlign: "justify" })) {
       editor.chain().focus().setTextAlign("left").run();
     } else {
       editor.chain().focus().setTextAlign("center").run();
@@ -42,6 +45,7 @@ export function MobileEditorToolbar({
   const getAlignCurrentIcon = () => {
     if (editor.isActive({ textAlign: "center" })) return <AlignCenter className="w-4 h-4" />;
     if (editor.isActive({ textAlign: "right" })) return <AlignRight className="w-4 h-4" />;
+    if (editor.isActive({ textAlign: "justify" })) return <AlignJustify className="w-4 h-4" />;
     return <AlignLeft className="w-4 h-4" />;
   };
 

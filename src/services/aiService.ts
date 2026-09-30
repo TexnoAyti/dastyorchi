@@ -413,9 +413,9 @@ export function cleanAndValidateHTML(rawHtml: any): string {
         'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
         'ol', 'ul', 'li',
         'blockquote', 'pre', 'code',
-        'span', 'div', 'a'
+        'span', 'div', 'a', 'img'
       ],
-      ALLOWED_ATTR: ['href', 'style', 'class', 'target', 'rel', 'colspan', 'rowspan', 'align'],
+      ALLOWED_ATTR: ['href', 'style', 'class', 'target', 'rel', 'colspan', 'rowspan', 'align', 'src', 'alt'],
       ALLOW_DATA_ATTR: false
     });
     return cleanResult.trim();
@@ -447,7 +447,7 @@ export async function chatWithLawyer(
   message: string,
   language: Language | "en",
   chatHistory: { role: string; content: string }[] = [],
-  files: { name: string; type: string; fileUrl?: string; data?: string }[] = [],
+  files: { name: string; type: string; fileUrl?: string; storagePath?: string; data?: string; extractedText?: string }[] = [],
   currentStep?: string,
   selectedCategory?: string,
   isBusinessMode?: boolean,
@@ -648,7 +648,9 @@ If unsure -> default to:
         pipelineTracker.update({ pdfInputReceived: true });
         pipelineTracker.log('INPUT', 'PDF file received', file.name);
       }
-      if (file.data) {
+      if (file.extractedText) {
+        decodedFilesText.push(`\n\n--- ILova QILINGAN HUJJAT: ${file.name} ---\n${file.extractedText}`);
+      } else if (file.data) {
         const base64Data = file.data.includes(',') ? file.data.split(',')[1] : file.data;
         if (file.type === 'text/plain' || file.name.endsWith('.docx') || file.name.endsWith('.pdf')) {
           try {
@@ -838,7 +840,7 @@ If unsure -> default to:
   
   if (files && files.length > 0) {
     for (const file of files) {
-      if (file.data) {
+      if (!file.extractedText && file.data) {
         const base64Data = file.data.includes(',') ? file.data.split(',')[1] : file.data;
         userParts.push({
           inlineData: {

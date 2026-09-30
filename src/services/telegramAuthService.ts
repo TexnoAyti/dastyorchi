@@ -129,6 +129,14 @@ export async function verifyStoredSession(): Promise<User | null> {
     }
 
     const data = await response.json();
+    if (data.firebaseCustomToken && (!auth.currentUser || auth.currentUser.uid !== data.user?.uid)) {
+      try {
+        await signInWithCustomToken(auth, data.firebaseCustomToken);
+        console.log("[TelegramAuth] Stored session Firebase re-auth: SUCCESS");
+      } catch (fbErr: any) {
+        console.warn("[TelegramAuth] Stored session Firebase re-auth notice:", fbErr?.code || fbErr?.message);
+      }
+    }
     return data.user || null;
   } catch (err) {
     console.warn("Session check network warning:", err);
